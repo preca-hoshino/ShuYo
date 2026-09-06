@@ -33,6 +33,7 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
+    - THIRD_PARTY_NOTICES.md
     - assets/images/
     - assets/fixtures/api/site.json
     - assets/fixtures/api/latest/latest.json
