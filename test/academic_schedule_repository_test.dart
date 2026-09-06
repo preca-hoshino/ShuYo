@@ -66,6 +66,9 @@ class _FakeAcademicScheduleApiClient extends AcademicScheduleApiClient {
 
 class _FakeAcademicAuthService implements AcademicAuthService {
   @override
+  Future<void> clearCachedCookiesForReauthentication() async {}
+
+  @override
   Future<Set<String>> clearCookies() async => {};
 
   @override

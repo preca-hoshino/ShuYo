@@ -158,6 +158,7 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
     // cookies installed by AcademicNativeAuthService before the first load.
     await Future<void>.delayed(const Duration(milliseconds: 500));
     if (!mounted) return;
+    _debug('callback-load', widget.callbackUri.toString());
     await _controller.loadRequest(widget.callbackUri);
     _cookiePollTimer = Timer.periodic(
       const Duration(milliseconds: 600),
@@ -184,6 +185,7 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
   void _handleNavigation(String value, {bool pageFinished = false}) {
     final uri = Uri.tryParse(value);
     if (uri == null) return;
+    _debug(pageFinished ? 'page-finished' : 'page-started', value);
     _clearTransientResourceErrorAfterNavigation(value);
     _lastNavigationUrl = value;
     if (_terminalFailure) return;
@@ -209,6 +211,9 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
 
   NavigationDecision _handleNavigationRequest(NavigationRequest request) {
     final uri = Uri.tryParse(request.url);
+    if (request.isMainFrame) {
+      _debug('navigation-request', request.url);
+    }
     if (uri != null && _isInternalWebViewScheme(uri.scheme)) {
       return NavigationDecision.navigate;
     }
@@ -218,6 +223,7 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
       return NavigationDecision.navigate;
     }
     if (request.isMainFrame) {
+      _debug('blocked-navigation', request.url);
       _fail('认证页面尝试跳转到非上海大学地址');
     }
     return NavigationDecision.prevent;
@@ -228,6 +234,11 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
       return;
     }
     final failedUrl = error.url ?? _lastNavigationUrl;
+    _debug(
+      'web-resource-error code=${error.errorCode} '
+      'type=${error.errorType} description=${error.description}',
+      failedUrl,
+    );
     _resourceErrorTimer?.cancel();
     _pendingResourceErrorUrl = failedUrl;
     final generation = ++_resourceErrorGeneration;
@@ -272,6 +283,11 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
       if (cookies.any(
         (cookie) => cookie.name == 'webvpn-token' && cookie.value.isNotEmpty,
       )) {
+        _debug(
+          'resource-error recovered by portal cookies '
+          'names=${_cookieNames(cookies)}',
+          currentUrl,
+        );
         _clearPendingResourceError();
         await _openAcademicSystem();
         return;
@@ -314,6 +330,7 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
     if (cookies.any(
       (cookie) => cookie.name == 'webvpn-token' && cookie.value.isNotEmpty,
     )) {
+      _debug('portal session cookie visible names=${_cookieNames(cookies)}');
       await _openAcademicSystem();
     }
   }
@@ -327,12 +344,14 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
       return;
     }
     _openingAcademicSystem = true;
+    _debug('open-academic-system', AcademicUrlResolver.webVpnBaseUrl);
     setState(() => _status = '正在进入上海大学教务系统');
     try {
       await _controller.loadRequest(
         Uri.parse('${AcademicUrlResolver.webVpnBaseUrl}/'),
       );
-    } on Object {
+    } on Object catch (error) {
+      _debug('academic-load-error error=${error.runtimeType}');
       _fail('WebVPN 已认证，但无法进入教务系统');
     }
   }
@@ -340,6 +359,8 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
   Future<void> _verifyAfterTicketLogin() async {
     if (_completed || _terminalFailure || _checkingTicketLogin) return;
     _checkingTicketLogin = true;
+    _debug('ticket-login-finished; waiting before home reload',
+        _lastNavigationUrl);
     if (mounted) setState(() => _status = '正在完成教务系统票据登录');
     await Future<void>.delayed(const Duration(seconds: 6));
     if (_completed || !mounted) return;
@@ -352,6 +373,7 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
       return;
     }
     _finalizingAcademic = true;
+    _debug('academic-ready; waiting for cookie commit', _lastNavigationUrl);
     // Give Android WebView's network service a short window to commit
     // Set-Cookie headers from the completed academic page before the Flutter
     // side starts its HTTP schedule request.
@@ -377,6 +399,7 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
     _clearPendingResourceError();
     _cookiePollTimer?.cancel();
     _timeoutTimer?.cancel();
+    _debug('completion-success', _lastNavigationUrl);
     Navigator.of(context).pop(true);
   }
 
@@ -386,6 +409,7 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
     _clearPendingResourceError();
     _cookiePollTimer?.cancel();
     _timeoutTimer?.cancel();
+    _debug('completion-failed message=$message', _lastNavigationUrl);
     setState(() => _error = message);
   }
 
@@ -399,5 +423,28 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
         scheme == 'data' ||
         scheme == 'blob' ||
         scheme == 'javascript';
+  }
+
+  List<String> _cookieNames(List<WebViewCookie> cookies) {
+    final names = cookies
+        .where((cookie) => cookie.name.isNotEmpty && cookie.value.isNotEmpty)
+        .map((cookie) => cookie.name)
+        .toSet()
+        .toList()
+      ..sort();
+    return names;
+  }
+
+  void _debug(String message, [String? value]) {
+    if (!kDebugMode) return;
+    final uri = value == null ? null : Uri.tryParse(value);
+    final location = uri == null ? '' : ' | ${_describeUri(uri)}';
+    debugPrint('[SHU_AUTH_CALLBACK] $message$location');
+  }
+
+  String _describeUri(Uri uri) {
+    final queryKeys = uri.queryParameters.keys.toList()..sort();
+    return '${uri.scheme}://${uri.host}${uri.path}'
+        '${queryKeys.isEmpty ? '' : ' queryKeys=$queryKeys'}';
   }
 }

@@ -117,8 +117,17 @@ class _AcademicWebVpnPreloaderState extends State<AcademicWebVpnPreloader> {
     if (!kDebugMode) {
       return;
     }
+    final uri = url == null ? null : Uri.tryParse(url);
+    final safeUrl = uri == null ? url : _describeUri(uri);
     debugPrint(
-      '[LEHU_WEBVIEW ACADEMIC_BG_PREP] $message${url == null ? '' : ' | $url'}',
+      '[SHU_ACADEMIC_PRELOAD] $message'
+      '${safeUrl == null ? '' : ' | $safeUrl'}',
     );
+  }
+
+  String _describeUri(Uri uri) {
+    final queryKeys = uri.queryParameters.keys.toList()..sort();
+    return '${uri.scheme}://${uri.host}${uri.path}'
+        '${queryKeys.isEmpty ? '' : ' queryKeys=$queryKeys'}';
   }
 }

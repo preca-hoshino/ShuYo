@@ -113,6 +113,58 @@ void main() {
     expect(header, contains('route=node-a'));
   });
 
+  test('live academic cookies replace stale cached values across paths',
+      () async {
+    final academic = Uri.parse(AcademicUrlResolver.webVpnBaseUrl);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      'academic.auth.cached_cookies.webvpn',
+      '{"academic":[{"name":"JSESSIONID","value":"stale-session","domain":"${academic.host}","path":"/jwglxt"}]}',
+    );
+    final service = AcademicAuthService(
+      cookieLoader: (domain) async => domain.host == academic.host
+          ? [
+              WebViewCookie(
+                name: 'JSESSIONID',
+                value: 'fresh-session',
+                domain: academic.host,
+              ),
+            ]
+          : const [],
+      cookieSetter: (_) async {},
+    );
+
+    final header = await service.cookieHeader(
+      targetUri: AcademicUrlResolver.scheduleIndexUri,
+    );
+
+    expect(header, contains('JSESSIONID=fresh-session'));
+    expect(header, isNot(contains('stale-session')));
+    expect(
+      prefs.getString('academic.auth.cached_cookies.webvpn'),
+      isNot(contains('stale-session')),
+    );
+  });
+
+  test('reauthentication clears only persisted campus cookies', () async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('academic.auth.cached_cookies.direct', 'direct');
+    await prefs.setString('academic.auth.cached_cookies.webvpn', 'webvpn');
+    await prefs.setBool('academic.auth.explicitly_signed_out', true);
+    await prefs.setString('academic.schedule.cache', 'schedule');
+    final service = AcademicAuthService(
+      cookieLoader: (_) async => const [],
+      cookieSetter: (_) async {},
+    );
+
+    await service.clearCachedCookiesForReauthentication();
+
+    expect(prefs.getString('academic.auth.cached_cookies.direct'), isNull);
+    expect(prefs.getString('academic.auth.cached_cookies.webvpn'), isNull);
+    expect(prefs.getBool('academic.auth.explicitly_signed_out'), isTrue);
+    expect(prefs.getString('academic.schedule.cache'), 'schedule');
+  });
+
   test('does not treat a stale portal token as an authenticated session',
       () async {
     final portal = Uri.parse(ForumUrlResolver.webVpnPortalUrl);

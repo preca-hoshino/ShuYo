@@ -258,6 +258,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
 
   Future<void> _persistAcademicLoginCookies() async {
     try {
+      _debugAcademicFlow('persist login cookies start');
       final authService = AcademicAuthService();
       // A successful login must clear the explicit-logout marker even when
       // Android's WebView has not exposed the newly-installed cookies yet.
@@ -265,7 +266,12 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
       // subsequent session validation to report `loginRequired`.
       await authService.markLoggedIn();
       await authService.cookieHeader();
-    } on Object {
+      _debugAcademicFlow('persist login cookies complete');
+    } on Object catch (error, stackTrace) {
+      _debugAcademicFlow(
+        'persist login cookies failed: $error',
+        stackTrace: stackTrace,
+      );
       // Cookie persistence is best effort and must not block the login flow.
     }
   }
@@ -993,6 +999,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     if (widget.isDemo) {
       return false;
     }
+    _debugAcademicFlow('post-login sync start');
     if (_syncingAcademicSchedule) {
       return false;
     }
@@ -1003,6 +1010,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     }
     try {
       final prepared = await _prepareAcademicWebVpnSessionInBackground();
+      _debugAcademicFlow('background preparation result=$prepared');
       if (!prepared) {
         final summary = await _scheduleRepository.homeSummary();
         if (mounted) {
@@ -1021,9 +1029,14 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
       // Reminder permissions are opt-in and must not be requested as part of
       // the automatic post-login schedule sync.
       await _scheduleNotificationService.syncScheduleReminders();
+      _debugAcademicFlow('post-login sync success');
       _showSnack('校园账户已登录，课表已同步');
       return true;
-    } on AcademicAuthException {
+    } on AcademicAuthException catch (error, stackTrace) {
+      _debugAcademicFlow(
+        'post-login sync rejected authentication: $error',
+        stackTrace: stackTrace,
+      );
       if (mounted) {
         final summary = await _scheduleRepository.homeSummary();
         if (mounted) {
@@ -1032,7 +1045,11 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
       }
       _showSnack('校园账户登录未完成，请重试');
       return false;
-    } on Object {
+    } on Object catch (error, stackTrace) {
+      _debugAcademicFlow(
+        'post-login sync failed: $error',
+        stackTrace: stackTrace,
+      );
       if (mounted) {
         final summary = await _scheduleRepository.homeSummary();
         if (mounted) {
@@ -1066,7 +1083,10 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     try {
       return await completer.future.timeout(
         const Duration(seconds: 75),
-        onTimeout: () => false,
+        onTimeout: () {
+          _debugAcademicFlow('background preparation timed out');
+          return false;
+        },
       );
     } finally {
       if (mounted && identical(_academicWebVpnPreloadCompleter, completer)) {
@@ -1076,6 +1096,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   }
 
   void _completeAcademicWebVpnPreload(bool success) {
+    _debugAcademicFlow('background preparation callback success=$success');
     final completer = _academicWebVpnPreloadCompleter;
     if (completer != null && !completer.isCompleted) {
       completer.complete(success);
@@ -2381,14 +2402,30 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
       return;
     }
     if (!mounted) return;
+    _debugAcademicFlow('opening campus login');
     final result = await Navigator.of(context).push<NativeLoginResult>(
       shuyoRoute(builder: (context) => const NativeLoginPage()),
     );
+    _debugAcademicFlow(
+        'campus login returned result=${result?.name ?? 'cancelled'}');
     if (result != NativeLoginResult.authenticated || !mounted) return;
     setState(() => _hasAcademicSession = true);
     _syncOnboardingAccountStatus();
     await _persistAcademicLoginCookies();
     await _syncScheduleAfterWebVpnLogin();
+  }
+
+  void _debugAcademicFlow(String message, {StackTrace? stackTrace}) {
+    assert(() {
+      debugPrint('[SHU_SCHEDULE_FLOW] $message');
+      if (stackTrace != null) {
+        debugPrintStack(
+          label: '[SHU_SCHEDULE_FLOW] stack',
+          stackTrace: stackTrace,
+        );
+      }
+      return true;
+    }());
   }
 
   void _showScheduleSyncingSnack() {

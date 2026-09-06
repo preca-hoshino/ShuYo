@@ -2,6 +2,7 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../data/models/academic_schedule.dart';
@@ -183,6 +184,7 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
       return;
     }
     setState(() => _refreshing = true);
+    if (kDebugMode) debugPrint('[SHU_SCHEDULE_FLOW] manual refresh start');
     try {
       final schedule = await widget.repository.refreshSchedule();
       final weekState = await widget.repository.loadWeekState();
@@ -206,10 +208,25 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
           await widget.notificationService.syncScheduleReminders(
         requestPermission: true,
       );
+      if (kDebugMode) debugPrint('[SHU_SCHEDULE_FLOW] manual refresh success');
       _showScheduleReminderSnack('课表已同步', reminderCount);
-    } on AcademicAuthException catch (_) {
+    } on AcademicAuthException catch (error, stackTrace) {
+      if (kDebugMode) {
+        debugPrint('[SHU_SCHEDULE_FLOW] manual refresh requires login: $error');
+        debugPrintStack(
+          label: '[SHU_SCHEDULE_FLOW] stack',
+          stackTrace: stackTrace,
+        );
+      }
       await _handleLoginRequired();
-    } on Object catch (error) {
+    } on Object catch (error, stackTrace) {
+      if (kDebugMode) {
+        debugPrint('[SHU_SCHEDULE_FLOW] manual refresh failed: $error');
+        debugPrintStack(
+          label: '[SHU_SCHEDULE_FLOW] stack',
+          stackTrace: stackTrace,
+        );
+      }
       await _showErrorDialog(
         title: '课表刷新失败',
         message: error.toString(),

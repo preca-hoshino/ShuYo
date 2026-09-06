@@ -8,6 +8,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import '../../core/academic_url_resolver.dart';
 import '../../core/client_user_agent.dart';
 import '../../core/forum_url_resolver.dart';
+import 'academic_auth_service.dart';
 
 enum AcademicVerificationMethod { wecom, sms }
 
@@ -93,10 +94,12 @@ class AcademicNativeAuthService {
   /// before the OAuth callback is loaded there.
   Future<void> installCookiesInWebView() async {
     final manager = WebViewCookieManager();
-    if (_target == _NativeAuthTarget.academic &&
-        AcademicUrlResolver.usesWebVpn &&
-        defaultTargetPlatform == TargetPlatform.android) {
-      await _resetWebVpnCookieStore(manager);
+    if (_target == _NativeAuthTarget.academic) {
+      await AcademicAuthService().clearCachedCookiesForReauthentication();
+      if (AcademicUrlResolver.usesWebVpn &&
+          defaultTargetPlatform == TargetPlatform.android) {
+        await _resetWebVpnCookieStore(manager);
+      }
     }
     final domains = <String>{};
     final expectedByDomain = <String, Map<String, String>>{};
@@ -183,8 +186,10 @@ class AcademicNativeAuthService {
   Future<void> _resetWebVpnCookieStore(WebViewCookieManager manager) async {
     // Android may retain multiple same-name tokens across host/path scopes;
     // setting an empty value for one URL does not reliably remove all of them.
-    // Snapshot ordinary cookies, clear the platform store atomically, then
-    // restore the snapshot before installing the fresh OAuth cookie.
+    // Preserve only forum-owned cookies, clear the platform store atomically,
+    // then restore the forum session before installing the fresh OAuth cookie.
+    // Academic and SSO cookies belong to the session being replaced, including
+    // JSESSIONID and route, so restoring them can resurrect an expired login.
     final domains = <Uri>[
       Uri.parse('https://webvpn.shu.edu.cn'),
       ForumUrlResolver.baseUri,
@@ -198,16 +203,36 @@ class AcademicNativeAuthService {
       try {
         final cookies = await manager.getCookies(domain: domain);
         for (final cookie in cookies) {
-          if (cookie.name == 'webvpn-token' || cookie.name == 'SHU_OAUTH2') {
+          if (!shouldPreserveCookieDuringAcademicReauthentication(
+            sourceUri: domain,
+            cookie: cookie,
+          )) {
             continue;
           }
+          final normalized = WebViewCookie(
+            name: cookie.name,
+            value: cookie.value,
+            domain: _normalizeCookieDomain(cookie.domain, domain.host),
+            path: cookie.path.isEmpty ? '/' : cookie.path,
+          );
           final key =
-              '${cookie.name}\u0000${cookie.domain}\u0000${cookie.path}';
-          preserved[key] = cookie;
+              '${normalized.name}\u0000${normalized.domain}\u0000${normalized.path}';
+          preserved[key] = normalized;
         }
       } on Object {
         // Continue with the remaining cookie domains.
       }
+    }
+    if (kDebugMode) {
+      final names = preserved.values
+          .map((cookie) => cookie.name)
+          .toSet()
+          .toList()
+        ..sort();
+      debugPrint(
+        '[SHU_AUTH] reset academic webview cookies '
+        'preservedForumNames=$names',
+      );
     }
     try {
       await manager.clearCookies();
@@ -221,6 +246,17 @@ class AcademicNativeAuthService {
         // Continue restoring the remaining ordinary cookies.
       }
     }
+  }
+
+  @visibleForTesting
+  static bool shouldPreserveCookieDuringAcademicReauthentication({
+    required Uri sourceUri,
+    required WebViewCookie cookie,
+  }) {
+    if (!ForumUrlResolver.isKnownForumHost(sourceUri.host.toLowerCase())) {
+      return false;
+    }
+    return cookie.name != 'webvpn-token' && cookie.name != 'SHU_OAUTH2';
   }
 
   Future<AcademicLoginResult> login({
