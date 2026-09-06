@@ -23,6 +23,7 @@ import '../data/repositories/classroom_repository.dart';
 import '../data/repositories/course_rating_repository.dart';
 import '../data/repositories/forum_repository.dart';
 import '../data/services/academic_schedule_notification_service.dart';
+import '../data/services/academic_schedule_display_settings_service.dart';
 import '../data/services/academic_schedule_widget_service.dart';
 import '../data/services/academic_schedule_api_client.dart';
 import '../data/services/academic_auth_service.dart';
@@ -60,6 +61,7 @@ import '../shared/widgets/client_update_prompt.dart';
 import '../shared/widgets/info_confirm_dialog.dart';
 import '../shared/widgets/app_header.dart';
 import '../shared/widgets/empty_state.dart';
+import '../shared/widgets/shuyo_launch_surface.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({
@@ -76,6 +78,9 @@ class AppShell extends StatefulWidget {
     required this.initialHasAcademicSession,
     required this.onboardingController,
     this.initialOpenSchedule = false,
+    this.initialScheduleState,
+    this.initialScheduleDisplayState,
+    this.initialScheduleLoadError,
     this.isDemo = false,
     this.demoData,
     this.onExitDemo,
@@ -92,6 +97,9 @@ class AppShell extends StatefulWidget {
   final int forumLoginSignal;
   final bool initialHasAcademicSession;
   final bool initialOpenSchedule;
+  final AcademicScheduleCacheState? initialScheduleState;
+  final AcademicScheduleDisplayState? initialScheduleDisplayState;
+  final String? initialScheduleLoadError;
   final StartupOnboardingController onboardingController;
   final bool isDemo;
   final DemoDataBundle? demoData;
@@ -169,6 +177,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   bool _onboardingStatusSyncScheduled = false;
   StreamSubscription<Uri?>? _widgetClickSubscription;
   bool _openingScheduleFromWidget = false;
+  final Set<Route<void>> _academicScheduleRoutes = {};
   late bool _hideShellForInitialWidgetLaunch = widget.initialOpenSchedule;
 
   @override
@@ -294,7 +303,9 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     if (_hideShellForInitialWidgetLaunch) {
-      return ColoredBox(color: Theme.of(context).scaffoldBackgroundColor);
+      return ShuYoLaunchSurface(
+        theme: ShuYoThemes.byId(widget.selectedThemeId),
+      );
     }
     ForumImageCache.configureCurrentAccount(
       _repo.hasLocalAccount ? _repo.profile.username : null,
@@ -443,15 +454,27 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   void _handleWidgetClick(Uri? uri) {
     if (uri?.scheme != 'shuyo' || uri?.host != 'schedule') return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(_openScheduleFromWidget());
+      if (mounted && !_hasCurrentAcademicScheduleRoute) {
+        unawaited(_openScheduleFromWidget());
+      }
     });
   }
+
+  bool get _hasCurrentAcademicScheduleRoute =>
+      _academicScheduleRoutes.any((route) => route.isCurrent);
 
   Future<void> _openScheduleFromWidget({bool initialLaunch = false}) async {
     if (_openingScheduleFromWidget) return;
     _openingScheduleFromWidget = true;
     try {
-      final navigation = _openAcademicSystem(animated: false);
+      final navigation = _openAcademicSystem(
+        animated: false,
+        initialState: initialLaunch ? widget.initialScheduleState : null,
+        initialDisplayState:
+            initialLaunch ? widget.initialScheduleDisplayState : null,
+        initialLoadError:
+            initialLaunch ? widget.initialScheduleLoadError : null,
+      );
       if (initialLaunch) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) setState(() => _hideShellForInitialWidgetLaunch = false);
@@ -2195,18 +2218,30 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     unawaited(_initializeForumBadges());
   }
 
-  Future<void> _openAcademicSystem({bool animated = true}) async {
-    await Navigator.of(context).push<void>(
-      shuyoRoute(
-        animated: animated,
-        builder: (context) => AcademicSchedulePage(
-          repository: _scheduleRepository,
-          notificationService: _scheduleNotificationService,
-          widgetService: _scheduleWidgetService,
-          onLoginRequired: _openAcademicLogin,
-        ),
+  Future<void> _openAcademicSystem({
+    bool animated = true,
+    AcademicScheduleCacheState? initialState,
+    AcademicScheduleDisplayState? initialDisplayState,
+    String? initialLoadError,
+  }) async {
+    final route = shuyoRoute<void>(
+      animated: animated,
+      builder: (context) => AcademicSchedulePage(
+        repository: _scheduleRepository,
+        notificationService: _scheduleNotificationService,
+        widgetService: _scheduleWidgetService,
+        onLoginRequired: _openAcademicLogin,
+        initialState: initialState,
+        initialDisplayState: initialDisplayState,
+        initialLoadError: initialLoadError,
       ),
     );
+    _academicScheduleRoutes.add(route);
+    try {
+      await Navigator.of(context).push<void>(route);
+    } finally {
+      _academicScheduleRoutes.remove(route);
+    }
     if (!mounted) {
       return;
     }

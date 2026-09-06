@@ -8,14 +8,18 @@ import '../core/client_app_info.dart';
 import '../core/forum_url_resolver.dart';
 import '../data/demo/demo_data_bundle.dart';
 import '../data/demo/demo_forum_repository.dart';
+import '../data/demo/demo_repositories.dart';
 import '../data/demo/demo_session.dart';
+import '../data/repositories/academic_schedule_repository.dart';
 import '../data/repositories/forum_repository.dart';
 import '../data/services/academic_auth_service.dart';
+import '../data/services/academic_schedule_display_settings_service.dart';
 import '../data/services/app_data_migration_service.dart';
 import '../data/services/client_settings_service.dart';
 import 'app_shell.dart';
 import '../features/onboarding/startup_onboarding.dart';
 import '../shared/theme/shuyo_theme.dart';
+import '../shared/widgets/shuyo_launch_surface.dart';
 
 class ShuYoApp extends StatefulWidget {
   const ShuYoApp({
@@ -100,7 +104,7 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
             return _StartupError(error: snapshot.error.toString());
           }
           if (!snapshot.hasData) {
-            return _StartupLoading(theme: theme);
+            return ShuYoLaunchSurface(theme: theme);
           }
           final data = snapshot.data!;
           final demo =
@@ -136,6 +140,9 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
               initialHasAcademicSession: demo || data.hasAcademicSession,
               initialOpenSchedule: data.openScheduleFromWidget &&
                   (demo || data.onboardingCompleted),
+              initialScheduleState: data.initialScheduleState,
+              initialScheduleDisplayState: data.initialScheduleDisplayState,
+              initialScheduleLoadError: data.initialScheduleLoadError,
               isDemo: demo,
               demoData: _demoData,
               onboardingController: _onboardingController,
@@ -178,6 +185,9 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
     final hasAcademicSession = await AcademicAuthService().hasAcademicSession();
     final onboardingCompleted =
         await _settingsService.loadStartupOnboardingCompleted();
+    final initialScheduleLoad = openScheduleFromWidget && onboardingCompleted
+        ? await _loadInitialScheduleState(AcademicScheduleRepository())
+        : const _InitialScheduleLoad();
     return _StartupData(
       repository: repository,
       autoUseWebVpnProxy: networkSettings.autoUseWebVpnProxy,
@@ -185,6 +195,9 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
       onboardingCompleted: onboardingCompleted,
       demoMode: false,
       openScheduleFromWidget: openScheduleFromWidget,
+      initialScheduleState: initialScheduleLoad.state,
+      initialScheduleDisplayState: initialScheduleLoad.displayState,
+      initialScheduleLoadError: initialScheduleLoad.error,
     );
   }
 
@@ -196,6 +209,11 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
     _demoMode = true;
     _demoData = demoData;
     _demoRepository = demoRepository;
+    final initialScheduleLoad = openScheduleFromWidget
+        ? await _loadInitialScheduleState(
+            DemoAcademicScheduleRepository(demoData.schedule),
+          )
+        : const _InitialScheduleLoad();
     return _StartupData(
       repository: demoRepository,
       autoUseWebVpnProxy: false,
@@ -203,7 +221,26 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
       onboardingCompleted: true,
       demoMode: true,
       openScheduleFromWidget: openScheduleFromWidget,
+      initialScheduleState: initialScheduleLoad.state,
+      initialScheduleDisplayState: initialScheduleLoad.displayState,
+      initialScheduleLoadError: initialScheduleLoad.error,
     );
+  }
+
+  Future<_InitialScheduleLoad> _loadInitialScheduleState(
+    AcademicScheduleRepository repository,
+  ) async {
+    try {
+      final scheduleStateFuture = repository.loadCachedState();
+      final displayStateFuture =
+          AcademicScheduleDisplaySettingsService().loadState();
+      return _InitialScheduleLoad(
+        state: await scheduleStateFuture,
+        displayState: await displayStateFuture,
+      );
+    } on Object catch (error) {
+      return _InitialScheduleLoad(error: error.toString());
+    }
   }
 
   Future<bool> _loadInitialScheduleWidgetLaunch() async {
@@ -325,6 +362,9 @@ class _StartupData {
     required this.onboardingCompleted,
     required this.demoMode,
     required this.openScheduleFromWidget,
+    this.initialScheduleState,
+    this.initialScheduleDisplayState,
+    this.initialScheduleLoadError,
   });
 
   final ForumRepository repository;
@@ -333,38 +373,21 @@ class _StartupData {
   final bool onboardingCompleted;
   final bool demoMode;
   final bool openScheduleFromWidget;
+  final AcademicScheduleCacheState? initialScheduleState;
+  final AcademicScheduleDisplayState? initialScheduleDisplayState;
+  final String? initialScheduleLoadError;
 }
 
-class _StartupLoading extends StatelessWidget {
-  const _StartupLoading({required this.theme});
+class _InitialScheduleLoad {
+  const _InitialScheduleLoad({
+    this.state,
+    this.displayState,
+    this.error,
+  });
 
-  final ShuYoThemeSpec theme;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: theme.colors.background,
-      body: Center(
-        child: Image.asset(
-          _iconAsset,
-          width: 112,
-          height: 112,
-          fit: BoxFit.contain,
-          filterQuality: FilterQuality.high,
-        ),
-      ),
-    );
-  }
-
-  String get _iconAsset {
-    if (theme.id == ShuYoThemes.defaultId) {
-      return 'assets/images/icon_clear_blue.png';
-    }
-    if (theme.colors.brightness == Brightness.light) {
-      return 'assets/images/icon_clear_black.png';
-    }
-    return 'assets/images/icon_clear.png';
-  }
+  final AcademicScheduleCacheState? state;
+  final AcademicScheduleDisplayState? displayState;
+  final String? error;
 }
 
 class _StartupError extends StatelessWidget {

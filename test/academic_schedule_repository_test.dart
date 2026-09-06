@@ -34,6 +34,21 @@ void main() {
     expect(state.currentWeek, 7);
   });
 
+  test('cached state loads the schedule and week anchor together', () async {
+    SharedPreferences.setMockInitialValues({});
+    final repository = AcademicScheduleRepository(
+      apiClient: _FakeAcademicScheduleApiClient(_schedule),
+    );
+    await repository.saveCachedSchedule(_schedule);
+    await repository.setCurrentWeek(3, now: DateTime(2026, 8, 31));
+
+    final cached = await repository.loadCachedState();
+
+    expect(cached.schedule?.term.displayName, _schedule.term.displayName);
+    expect(cached.weekState.currentWeek, 3);
+    expect(cached.weekState.anchorMonday, DateTime(2026, 8, 31));
+  });
+
   test('legacy week anchors derive the first teaching week start', () {
     final state = ScheduleWeekState(
       currentWeek: 7,

@@ -28,12 +28,18 @@ class AcademicSchedulePage extends StatefulWidget {
     required this.notificationService,
     required this.widgetService,
     required this.onLoginRequired,
+    this.initialState,
+    this.initialDisplayState,
+    this.initialLoadError,
   });
 
   final AcademicScheduleRepository repository;
   final AcademicScheduleNotificationService notificationService;
   final AcademicScheduleWidgetService widgetService;
   final Future<void> Function() onLoginRequired;
+  final AcademicScheduleCacheState? initialState;
+  final AcademicScheduleDisplayState? initialDisplayState;
+  final String? initialLoadError;
 
   @override
   State<AcademicSchedulePage> createState() => _AcademicSchedulePageState();
@@ -53,12 +59,30 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
       const AcademicScheduleDisplaySettings(
           colorful: false, showTeacher: false);
   Map<String, int> _courseColorValues = const {};
+  late bool _usingInitialState;
+  String? _initialLoadError;
 
   @override
   void initState() {
     super.initState();
-    _loadFuture = _loadCached();
-    unawaited(_loadDisplaySettings());
+    final initialState = widget.initialState;
+    _usingInitialState =
+        initialState != null || widget.initialLoadError != null;
+    _initialLoadError = widget.initialLoadError;
+    if (initialState != null) {
+      _applyCachedState(initialState.schedule, initialState.weekState);
+      unawaited(
+        widget.widgetService.syncSchedule(
+          schedule: initialState.schedule,
+          weekState: initialState.weekState,
+        ),
+      );
+    }
+    final initialDisplayState = widget.initialDisplayState;
+    if (initialDisplayState != null) {
+      _applyDisplayState(initialDisplayState);
+    }
+    _loadFuture = _usingInitialState ? Future<void>.value() : _loadCached();
     _weekTimer = Timer.periodic(
       const Duration(minutes: 1),
       (_) => _refreshDisplayedWeekIfNeeded(),
@@ -84,103 +108,123 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
           const SizedBox(width: 2),
         ],
       ),
-      body: FutureBuilder<void>(
-        future: _loadFuture,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
-            return const Center(
-                child: CircularProgressIndicator(strokeWidth: 3));
-          }
-          if (snapshot.hasError) {
-            return _ScheduleErrorState(
-              message: snapshot.error.toString(),
-              onRetry: () => setState(() => _loadFuture = _loadCached()),
-            );
-          }
-          final schedule = _schedule;
-          final weekState = _weekState;
-          if (schedule == null || weekState == null) {
-            return EmptyState(
-              icon: Icons.calendar_month_outlined,
-              title: '还没有课表',
-              message: '登录教务后刷新一次，就可以在本地显示课表。',
-              action: FilledButton.icon(
-                onPressed: _refreshSchedule,
-                icon: const Icon(Icons.refresh),
-                label: const Text('同步课表'),
-              ),
-            );
-          }
-          return _ScheduleBody(
-            schedule: schedule,
-            weekState: weekState,
-            displayedWeek: _displayedWeek,
-            displaySettings: _displaySettings,
-            courseColorValues: _courseColorValues,
-            onPreviousWeek: _displayedWeek <= 1
-                ? null
-                : () => setState(() {
-                      _displayedWeek--;
-                      _followsCurrentWeek = false;
-                      _selectedManualSlot = null;
-                    }),
-            onNextWeek: _displayedWeek >= schedule.maxWeek
-                ? null
-                : () => setState(() {
-                      _displayedWeek++;
-                      _followsCurrentWeek = false;
-                      _selectedManualSlot = null;
-                    }),
-            onQuickWeekSelected: (week) => setState(() {
-              _displayedWeek = week;
-              _followsCurrentWeek = false;
-              _selectedManualSlot = null;
-            }),
-            selectedManualSlot: _selectedManualSlot,
-            canAddCourse: true,
-            onEmptySlotTap: _handleEmptySlotTap,
-            onCourseTap: _handleCourseTap,
-          );
-        },
-      ),
+      body: _usingInitialState
+          ? _buildLoadedBody(_initialLoadError)
+          : FutureBuilder<void>(
+              future: _loadFuture,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const Center(
+                      child: CircularProgressIndicator(strokeWidth: 3));
+                }
+                if (snapshot.hasError) {
+                  return _buildLoadedBody(snapshot.error.toString());
+                }
+                return _buildLoadedBody(null);
+              },
+            ),
     );
   }
 
-  Future<void> _loadDisplaySettings() async {
-    final settings = await _displaySettingsService.loadSettings();
-    final colorValues = await _displaySettingsService.loadCourseColors();
-    if (!mounted) {
-      return;
+  Widget _buildLoadedBody(String? error) {
+    if (error != null) {
+      return _ScheduleErrorState(
+        message: error,
+        onRetry: _retryLoadCached,
+      );
     }
+    final schedule = _schedule;
+    final weekState = _weekState;
+    if (schedule == null || weekState == null) {
+      return EmptyState(
+        icon: Icons.calendar_month_outlined,
+        title: '还没有课表',
+        message: '登录教务后刷新一次，就可以在本地显示课表。',
+        action: FilledButton.icon(
+          onPressed: _refreshSchedule,
+          icon: const Icon(Icons.refresh),
+          label: const Text('同步课表'),
+        ),
+      );
+    }
+    return _ScheduleBody(
+      schedule: schedule,
+      weekState: weekState,
+      displayedWeek: _displayedWeek,
+      displaySettings: _displaySettings,
+      courseColorValues: _courseColorValues,
+      onPreviousWeek: _displayedWeek <= 1
+          ? null
+          : () => setState(() {
+                _displayedWeek--;
+                _followsCurrentWeek = false;
+                _selectedManualSlot = null;
+              }),
+      onNextWeek: _displayedWeek >= schedule.maxWeek
+          ? null
+          : () => setState(() {
+                _displayedWeek++;
+                _followsCurrentWeek = false;
+                _selectedManualSlot = null;
+              }),
+      onQuickWeekSelected: (week) => setState(() {
+        _displayedWeek = week;
+        _followsCurrentWeek = false;
+        _selectedManualSlot = null;
+      }),
+      selectedManualSlot: _selectedManualSlot,
+      canAddCourse: true,
+      onEmptySlotTap: _handleEmptySlotTap,
+      onCourseTap: _handleCourseTap,
+    );
+  }
+
+  void _retryLoadCached() {
     setState(() {
-      _displaySettings = settings;
-      _courseColorValues = colorValues;
+      _usingInitialState = false;
+      _initialLoadError = null;
+      _loadFuture = _loadCached();
     });
   }
 
   Future<void> _loadCached() async {
-    final schedule = await widget.repository.loadCachedSchedule();
-    final weekState = await widget.repository.loadWeekState();
+    final cachedStateFuture = widget.repository.loadCachedState();
+    final displayStateFuture = _displaySettingsService.loadState();
+    final cachedState = await cachedStateFuture;
+    final displayState = await displayStateFuture;
     if (!mounted) {
       return;
     }
     setState(() {
-      _schedule = schedule;
-      _weekState = weekState;
-      _displayedWeek = schedule == null
-          ? 1
-          : _displayableWeek(
-              widget.repository.activeWeekFromState(schedule, weekState),
-              schedule,
-            );
-      _followsCurrentWeek = true;
+      _applyCachedState(cachedState.schedule, cachedState.weekState);
+      _applyDisplayState(displayState);
     });
     unawaited(
       widget.widgetService.syncSchedule(
-        schedule: schedule,
-        weekState: weekState,
+        schedule: cachedState.schedule,
+        weekState: cachedState.weekState,
       ),
     );
+  }
+
+  void _applyDisplayState(AcademicScheduleDisplayState state) {
+    _displaySettings = state.settings;
+    _courseColorValues = state.courseColorValues;
+  }
+
+  void _applyCachedState(
+    AcademicSchedule? schedule,
+    ScheduleWeekState weekState,
+  ) {
+    _schedule = schedule;
+    _weekState = weekState;
+    _displayedWeek = schedule == null
+        ? 1
+        : _displayableWeek(
+            widget.repository.activeWeekFromState(schedule, weekState),
+            schedule,
+          );
+    _followsCurrentWeek = true;
   }
 
   Future<void> _refreshSchedule() async {

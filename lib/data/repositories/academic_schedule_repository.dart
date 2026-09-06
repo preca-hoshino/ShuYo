@@ -24,6 +24,16 @@ class ScheduleHomeSummary {
   final String text;
 }
 
+class AcademicScheduleCacheState {
+  const AcademicScheduleCacheState({
+    required this.schedule,
+    required this.weekState,
+  });
+
+  final AcademicSchedule? schedule;
+  final ScheduleWeekState weekState;
+}
+
 class AcademicScheduleRepository {
   AcademicScheduleRepository({
     AcademicScheduleApiClient? apiClient,
@@ -49,6 +59,15 @@ class AcademicScheduleRepository {
       return null;
     }
     return AcademicSchedule.fromJson(decoded);
+  }
+
+  Future<AcademicScheduleCacheState> loadCachedState({DateTime? now}) async {
+    final scheduleFuture = loadCachedSchedule();
+    final weekStateFuture = loadWeekState(now: now);
+    return AcademicScheduleCacheState(
+      schedule: await scheduleFuture,
+      weekState: await weekStateFuture,
+    );
   }
 
   Future<AcademicSchedule> refreshSchedule() async {
