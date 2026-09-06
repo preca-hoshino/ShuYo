@@ -305,45 +305,68 @@ class _AccountLogoutRowState extends State<_AccountLogoutRow> {
   Future<void> _chooseAccount() async {
     final target = await showModalBottomSheet<_LogoutTarget>(
       context: context,
-      showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
-              child: Text(
-                '选择要退出的账户',
-                style: ShuYoTextStyles.sectionTitle(),
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        final colors = context.shuyoColors;
+        final bottomPadding = MediaQuery.of(context).viewPadding.bottom;
+        return SafeArea(
+          top: false,
+          bottom: false,
+          child: Container(
+            width: double.infinity,
+            padding: EdgeInsets.fromLTRB(12, 8, 12, 12 + bottomPadding),
+            decoration: BoxDecoration(
+              color: colors.surface,
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(8),
               ),
             ),
-            ListTile(
-              leading: const Icon(Icons.school_outlined),
-              title: const Text('上大校园账户'),
-              subtitle: Text(
-                _hasAcademicAccount ? '课表和校园服务需要重新登录' : '未登录',
+            child: Material(
+              color: Colors.transparent,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+                    child: Text(
+                      '选择要退出的账户',
+                      style: ShuYoTextStyles.sectionTitle(
+                        color: colors.textPrimary,
+                      ),
+                    ),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.school_outlined),
+                    title: const Text('上大校园账户'),
+                    subtitle: Text(
+                      _hasAcademicAccount ? '课表和校园服务需要重新登录' : '未登录',
+                    ),
+                    enabled:
+                        _hasAcademicAccount && widget.onAcademicLogout != null,
+                    onTap: _hasAcademicAccount &&
+                            widget.onAcademicLogout != null
+                        ? () =>
+                            Navigator.of(context).pop(_LogoutTarget.academic)
+                        : null,
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.forum_outlined),
+                    title: const Text('乐乎账户'),
+                    subtitle: Text(
+                      _hasForumAccount ? '清除论坛会话和本地账户数据' : '未登录',
+                    ),
+                    enabled: _hasForumAccount && widget.onForumLogout != null,
+                    onTap: _hasForumAccount && widget.onForumLogout != null
+                        ? () => Navigator.of(context).pop(_LogoutTarget.forum)
+                        : null,
+                  ),
+                ],
               ),
-              enabled: _hasAcademicAccount && widget.onAcademicLogout != null,
-              onTap: _hasAcademicAccount && widget.onAcademicLogout != null
-                  ? () => Navigator.of(context).pop(_LogoutTarget.academic)
-                  : null,
             ),
-            ListTile(
-              leading: const Icon(Icons.forum_outlined),
-              title: const Text('乐乎账户'),
-              subtitle: Text(
-                _hasForumAccount ? '清除论坛会话和本地账户数据' : '未登录',
-              ),
-              enabled: _hasForumAccount && widget.onForumLogout != null,
-              onTap: _hasForumAccount && widget.onForumLogout != null
-                  ? () => Navigator.of(context).pop(_LogoutTarget.forum)
-                  : null,
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
     if (target == null || !mounted) return;
     await _confirmAndLogout(target);

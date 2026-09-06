@@ -326,13 +326,11 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
     final schedule = _schedule;
     final currentState = _weekState;
     if (schedule == null || currentState == null) return;
-    final picked = await showDatePicker(
+    final picked = await showDialog<DateTime>(
       context: context,
-      helpText: '选择开学日期',
-      initialDate: currentState.firstWeekStart,
-      firstDate: DateTime(2000),
-      lastDate: DateTime(2100, 12, 31),
-      selectableDayPredicate: (date) => date.weekday == DateTime.monday,
+      builder: (context) => _FirstWeekDatePickerDialog(
+        initialDate: currentState.firstWeekStart,
+      ),
     );
     if (picked == null || !mounted) return;
     await widget.repository.setFirstWeekStart(picked);
@@ -1208,6 +1206,83 @@ class _DisplaySettingsSheetState extends State<_DisplaySettingsSheet> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FirstWeekDatePickerDialog extends StatefulWidget {
+  const _FirstWeekDatePickerDialog({required this.initialDate});
+
+  final DateTime initialDate;
+
+  @override
+  State<_FirstWeekDatePickerDialog> createState() =>
+      _FirstWeekDatePickerDialogState();
+}
+
+class _FirstWeekDatePickerDialogState
+    extends State<_FirstWeekDatePickerDialog> {
+  late DateTime _selectedDate = widget.initialDate;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.shuyoColors;
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+      child: Container(
+        width: double.infinity,
+        constraints: const BoxConstraints(maxWidth: 400),
+        decoration: BoxDecoration(
+          color: colors.surface,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 4),
+                child: Text(
+                  '选择开学日期',
+                  style: ShuYoTextStyles.sectionTitle(
+                    color: colors.textPrimary,
+                  ),
+                ),
+              ),
+              CalendarDatePicker(
+                initialDate: widget.initialDate,
+                firstDate: DateTime(2000),
+                lastDate: DateTime(2100, 12, 31),
+                selectableDayPredicate: (date) =>
+                    date.weekday == DateTime.monday,
+                onDateChanged: (date) => setState(() => _selectedDate = date),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('取消'),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      onPressed: () => Navigator.of(context).pop(_selectedDate),
+                      child: const Text('确定'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
