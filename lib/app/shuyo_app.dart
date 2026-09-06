@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 import '../core/client_app_info.dart';
 import '../core/forum_url_resolver.dart';
@@ -78,6 +79,13 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
     return MaterialApp(
       title: 'ShuYo',
       debugShowCheckedModeBanner: false,
+      locale: const Locale('zh', 'CN'),
+      supportedLocales: const [Locale('zh', 'CN')],
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+      ],
       theme: theme.themeData(),
       home: FutureBuilder<_StartupData>(
         future: _startupFuture,
