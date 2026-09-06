@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:home_widget/home_widget.dart';
 
 import '../core/client_app_info.dart';
 import '../core/forum_url_resolver.dart';
@@ -40,6 +43,8 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
   ForumRepository? _demoRepository;
   int _academicLoginSignal = 0;
   int _forumLoginSignal = 0;
+  late final Future<bool> _initialScheduleWidgetLaunch;
+  bool _initialWidgetLaunchConsumed = false;
   Brightness _systemBrightness =
       WidgetsBinding.instance.platformDispatcher.platformBrightness;
 
@@ -49,6 +54,7 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
     _manualThemeId = ShuYoThemes.byId(widget.initialThemeId).id;
     _followSystemTheme = widget.initialFollowSystemTheme;
     WidgetsBinding.instance.addObserver(this);
+    _initialScheduleWidgetLaunch = _loadInitialScheduleWidgetLaunch();
     _startupFuture = _loadStartup();
     _loadTheme();
   }
@@ -128,6 +134,8 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
               academicLoginSignal: _academicLoginSignal,
               forumLoginSignal: _forumLoginSignal,
               initialHasAcademicSession: demo || data.hasAcademicSession,
+              initialOpenSchedule: data.openScheduleFromWidget &&
+                  (demo || data.onboardingCompleted),
               isDemo: demo,
               demoData: _demoData,
               onboardingController: _onboardingController,
@@ -147,14 +155,19 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
   }
 
   Future<_StartupData> _loadStartup() async {
+    final openScheduleFromWidget = await _takeInitialScheduleWidgetLaunch();
     if (await DemoSession.isEnabled()) {
-      return _loadDemoStartup();
+      return _loadDemoStartup(
+        openScheduleFromWidget: openScheduleFromWidget,
+      );
     }
     // This must run before any repository/auth service reads local state.  The
     // migration intentionally resets this major release to a fresh install.
     await _dataMigrationService.migrateIfNeeded();
     if (await DemoSession.isEnabled()) {
-      return _loadDemoStartup();
+      return _loadDemoStartup(
+        openScheduleFromWidget: openScheduleFromWidget,
+      );
     }
     await ClientAppInfo.load();
     final networkSettings = await _settingsService.loadNetworkSettings();
@@ -171,10 +184,13 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
       hasAcademicSession: hasAcademicSession,
       onboardingCompleted: onboardingCompleted,
       demoMode: false,
+      openScheduleFromWidget: openScheduleFromWidget,
     );
   }
 
-  Future<_StartupData> _loadDemoStartup() async {
+  Future<_StartupData> _loadDemoStartup({
+    bool openScheduleFromWidget = false,
+  }) async {
     final demoData = await DemoDataBundle.load();
     final demoRepository = await DemoForumRepository.load();
     _demoMode = true;
@@ -186,7 +202,24 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
       hasAcademicSession: true,
       onboardingCompleted: true,
       demoMode: true,
+      openScheduleFromWidget: openScheduleFromWidget,
     );
+  }
+
+  Future<bool> _loadInitialScheduleWidgetLaunch() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final uri = await HomeWidget.initiallyLaunchedFromHomeWidget();
+      return uri?.scheme == 'shuyo' && uri?.host == 'schedule';
+    } on Object {
+      return false;
+    }
+  }
+
+  Future<bool> _takeInitialScheduleWidgetLaunch() async {
+    if (_initialWidgetLaunchConsumed) return false;
+    _initialWidgetLaunchConsumed = true;
+    return _initialScheduleWidgetLaunch;
   }
 
   Future<void> _activateDemoMode() async {
@@ -291,6 +324,7 @@ class _StartupData {
     required this.hasAcademicSession,
     required this.onboardingCompleted,
     required this.demoMode,
+    required this.openScheduleFromWidget,
   });
 
   final ForumRepository repository;
@@ -298,6 +332,7 @@ class _StartupData {
   final bool hasAcademicSession;
   final bool onboardingCompleted;
   final bool demoMode;
+  final bool openScheduleFromWidget;
 }
 
 class _StartupLoading extends StatelessWidget {

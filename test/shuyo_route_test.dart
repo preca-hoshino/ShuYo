@@ -21,4 +21,14 @@ void main() {
 
     expect(route, isA<PageRouteBuilder<void>>());
   });
+
+  test('supports an immediate route without transition animation', () {
+    final route = shuyoRoute<void>(
+      animated: false,
+      builder: (_) => const SizedBox(),
+    ) as PageRouteBuilder<void>;
+
+    expect(route.transitionDuration, Duration.zero);
+    expect(route.reverseTransitionDuration, Duration.zero);
+  });
 }

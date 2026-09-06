@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:home_widget/home_widget.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -74,6 +75,7 @@ class AppShell extends StatefulWidget {
     required this.forumLoginSignal,
     required this.initialHasAcademicSession,
     required this.onboardingController,
+    this.initialOpenSchedule = false,
     this.isDemo = false,
     this.demoData,
     this.onExitDemo,
@@ -89,6 +91,7 @@ class AppShell extends StatefulWidget {
   final int academicLoginSignal;
   final int forumLoginSignal;
   final bool initialHasAcademicSession;
+  final bool initialOpenSchedule;
   final StartupOnboardingController onboardingController;
   final bool isDemo;
   final DemoDataBundle? demoData;
@@ -164,6 +167,9 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   int _forumRecoveryGeneration = 0;
   Future<ForumRecoveryResult>? _forumRecoveryFuture;
   bool _onboardingStatusSyncScheduled = false;
+  StreamSubscription<Uri?>? _widgetClickSubscription;
+  bool _openingScheduleFromWidget = false;
+  late bool _hideShellForInitialWidgetLaunch = widget.initialOpenSchedule;
 
   @override
   void initState() {
@@ -208,6 +214,15 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
       onForumLogout: _logoutForumAccount,
     );
     _resetFeedFuture();
+    if (Platform.isAndroid) {
+      _widgetClickSubscription =
+          HomeWidget.widgetClicked.listen(_handleWidgetClick);
+      if (widget.initialOpenSchedule) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) unawaited(_openScheduleFromWidget(initialLaunch: true));
+        });
+      }
+    }
     unawaited(_initializeForumBadges());
     unawaited(_refreshScheduleSummaryQuietly());
     unawaited(_loadAnnouncementSummaryFromCache());
@@ -278,6 +293,9 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    if (_hideShellForInitialWidgetLaunch) {
+      return ColoredBox(color: Theme.of(context).scaffoldBackgroundColor);
+    }
     ForumImageCache.configureCurrentAccount(
       _repo.hasLocalAccount ? _repo.profile.username : null,
     );
@@ -412,6 +430,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    unawaited(_widgetClickSubscription?.cancel());
     _scheduleSummaryTimer?.cancel();
     _announcementSummaryTimer?.cancel();
     _forumBadgeRefreshTimer?.cancel();
@@ -419,6 +438,29 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     widget.onboardingController.setAccountLogoutHandlers();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  void _handleWidgetClick(Uri? uri) {
+    if (uri?.scheme != 'shuyo' || uri?.host != 'schedule') return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_openScheduleFromWidget());
+    });
+  }
+
+  Future<void> _openScheduleFromWidget({bool initialLaunch = false}) async {
+    if (_openingScheduleFromWidget) return;
+    _openingScheduleFromWidget = true;
+    try {
+      final navigation = _openAcademicSystem(animated: false);
+      if (initialLaunch) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) setState(() => _hideShellForInitialWidgetLaunch = false);
+        });
+      }
+      await navigation;
+    } finally {
+      _openingScheduleFromWidget = false;
+    }
   }
 
   @override
@@ -2153,9 +2195,10 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     unawaited(_initializeForumBadges());
   }
 
-  Future<void> _openAcademicSystem() async {
+  Future<void> _openAcademicSystem({bool animated = true}) async {
     await Navigator.of(context).push<void>(
       shuyoRoute(
+        animated: animated,
         builder: (context) => AcademicSchedulePage(
           repository: _scheduleRepository,
           notificationService: _scheduleNotificationService,
