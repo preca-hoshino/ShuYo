@@ -13,6 +13,9 @@ class ScheduleWeekState {
 
   final int currentWeek;
   final DateTime anchorMonday;
+
+  DateTime get firstWeekStart =>
+      anchorMonday.subtract(Duration(days: (currentWeek - 1) * 7));
 }
 
 class ScheduleHomeSummary {
@@ -82,6 +85,15 @@ class AcademicScheduleRepository {
     await prefs.setString(
       _anchorMondayKey,
       startOfWeek(now ?? DateTime.now()).toIso8601String(),
+    );
+  }
+
+  Future<void> setFirstWeekStart(DateTime date) async {
+    final prefs = await _preferencesLoader();
+    await prefs.setInt(_anchorWeekKey, 1);
+    await prefs.setString(
+      _anchorMondayKey,
+      startOfWeek(date).toIso8601String(),
     );
   }
 

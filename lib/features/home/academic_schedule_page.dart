@@ -71,9 +71,10 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
       appBar: AppBar(
         title: Text(_schedule?.term.displayName ?? '课表'),
         actions: [
-          TextButton(
-            onPressed: _schedule == null ? null : _setDisplayedWeekAsCurrent,
-            child: const Text('设为当周'),
+          IconButton(
+            tooltip: '设置开学日期',
+            onPressed: _schedule == null ? null : _setFirstWeekStartDate,
+            icon: const Icon(Icons.edit_calendar_outlined),
           ),
           IconButton(
             tooltip: '更多',
@@ -116,14 +117,14 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
             displayedWeek: _displayedWeek,
             displaySettings: _displaySettings,
             courseColorValues: _courseColorValues,
-            onPreviousWeek: _displayedWeek <= 0
+            onPreviousWeek: _displayedWeek <= 1
                 ? null
                 : () => setState(() {
                       _displayedWeek--;
                       _followsCurrentWeek = false;
                       _selectedManualSlot = null;
                     }),
-            onNextWeek: _displayedWeek >= schedule.vacationWeek
+            onNextWeek: _displayedWeek >= schedule.maxWeek
                 ? null
                 : () => setState(() {
                       _displayedWeek++;
@@ -136,7 +137,7 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
               _selectedManualSlot = null;
             }),
             selectedManualSlot: _selectedManualSlot,
-            canAddCourse: !schedule.isVacationWeek(_displayedWeek),
+            canAddCourse: true,
             onEmptySlotTap: _handleEmptySlotTap,
             onCourseTap: _handleCourseTap,
           );
@@ -168,7 +169,10 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
       _weekState = weekState;
       _displayedWeek = schedule == null
           ? 1
-          : widget.repository.activeWeekFromState(schedule, weekState);
+          : _displayableWeek(
+              widget.repository.activeWeekFromState(schedule, weekState),
+              schedule,
+            );
       _followsCurrentWeek = true;
     });
     unawaited(
@@ -194,8 +198,10 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
       setState(() {
         _schedule = schedule;
         _weekState = weekState;
-        _displayedWeek =
-            widget.repository.activeWeekFromState(schedule, weekState);
+        _displayedWeek = _displayableWeek(
+          widget.repository.activeWeekFromState(schedule, weekState),
+          schedule,
+        );
         _followsCurrentWeek = true;
       });
       unawaited(
@@ -272,16 +278,32 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
     if (mounted && _schedule != null) _showSnack('课表已同步');
   }
 
-  Future<void> _setDisplayedWeekAsCurrent() async {
-    final week = _displayedWeek;
-    await widget.repository.setCurrentWeek(week);
+  Future<void> _setFirstWeekStartDate() async {
+    final schedule = _schedule;
+    final currentState = _weekState;
+    if (schedule == null || currentState == null) return;
+    final picked = await showDatePicker(
+      context: context,
+      helpText: '选择开学日期',
+      initialDate: currentState.firstWeekStart,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100, 12, 31),
+      selectableDayPredicate: (date) => date.weekday == DateTime.monday,
+    );
+    if (picked == null || !mounted) return;
+    await widget.repository.setFirstWeekStart(picked);
     final weekState = await widget.repository.loadWeekState();
     if (!mounted) {
       return;
     }
     setState(() {
       _weekState = weekState;
+      _displayedWeek = _displayableWeek(
+        widget.repository.activeWeekFromState(schedule, weekState),
+        schedule,
+      );
       _followsCurrentWeek = true;
+      _selectedManualSlot = null;
     });
     unawaited(
       widget.widgetService.syncSchedule(
@@ -292,12 +314,12 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
     await widget.notificationService.syncScheduleReminders(
       requestPermission: true,
     );
-    _showSnack('已将第$week周设为当周');
+    _showSnack('已将 ${picked.month}月${picked.day}日设为第一周首日');
   }
 
   Future<void> _handleEmptySlotTap(_ScheduleSlot slot) async {
     final schedule = _schedule;
-    if (schedule == null || schedule.isVacationWeek(_displayedWeek)) {
+    if (schedule == null) {
       return;
     }
     final selected = _selectedManualSlot;
@@ -310,7 +332,7 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
 
   Future<void> _openManualCourseSheet(_ScheduleSlot slot) async {
     final schedule = _schedule;
-    if (schedule == null || schedule.isVacationWeek(_displayedWeek)) {
+    if (schedule == null) {
       return;
     }
     final result = await Navigator.of(context).push<ScheduleCourseEditorResult>(
@@ -945,7 +967,13 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
 
   void _showScheduleReminderSnack(String prefix, int reminderCount) {
     final schedule = _schedule;
-    if (schedule != null && schedule.isVacationWeek(_displayedWeek)) {
+    final weekState = _weekState;
+    final activeWeek = schedule == null || weekState == null
+        ? null
+        : widget.repository.activeWeekFromState(schedule, weekState);
+    if (schedule != null &&
+        activeWeek != null &&
+        schedule.isVacationWeek(activeWeek)) {
       _showSnack('$prefix，假期中无课程提醒');
       return;
     }
@@ -993,11 +1021,12 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
       schedule,
       weekState,
     );
-    if (activeWeek == _displayedWeek) {
+    final displayedWeek = _displayableWeek(activeWeek, schedule);
+    if (displayedWeek == _displayedWeek) {
       return;
     }
     setState(() {
-      _displayedWeek = activeWeek;
+      _displayedWeek = displayedWeek;
       _selectedManualSlot = null;
     });
     unawaited(
@@ -1031,6 +1060,9 @@ enum _CourseDeleteScope {
   allWeeksInSlot,
   allCourseSlots,
 }
+
+int _displayableWeek(int activeWeek, AcademicSchedule schedule) =>
+    activeWeek.clamp(1, schedule.maxWeek);
 
 // Kept until the legacy bottom-sheet editor is removed after the full-page
 // editor rollout is verified.
@@ -1108,6 +1140,13 @@ class _DisplaySettingsSheetState extends State<_DisplaySettingsSheet> {
               title: const Text('显示教师'),
               value: _showTeacher,
               onChanged: (value) => setState(() => _showTeacher = value),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+              child: Text(
+                'ShuYo 支持添加小组件，试着在系统桌面中找找吧～',
+                style: ShuYoTextStyles.meta(color: colors.textMuted),
+              ),
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
@@ -1786,7 +1825,6 @@ class _ScheduleBody extends StatelessWidget {
       children: [
         _WeekSwitcher(
           week: displayedWeek,
-          isVacation: schedule.isVacationWeek(displayedWeek),
           maxWeek: schedule.maxWeek,
           onPrevious: onPreviousWeek,
           onNext: onNextWeek,
@@ -1840,7 +1878,6 @@ class _ScheduleBody extends StatelessWidget {
 class _WeekSwitcher extends StatefulWidget {
   const _WeekSwitcher({
     required this.week,
-    required this.isVacation,
     required this.maxWeek,
     required this.onPrevious,
     required this.onNext,
@@ -1848,7 +1885,6 @@ class _WeekSwitcher extends StatefulWidget {
   });
 
   final int week;
-  final bool isVacation;
   final int maxWeek;
   final VoidCallback? onPrevious;
   final VoidCallback? onNext;
@@ -1932,9 +1968,7 @@ class _WeekSwitcherState extends State<_WeekSwitcher> {
                                 ),
                               )
                             : Text(
-                                widget.isVacation
-                                    ? '假期中'
-                                    : '第 ${widget.week} 周',
+                                '第 ${widget.week} 周',
                                 key: const ValueKey('week-title'),
                                 textAlign: TextAlign.center,
                                 style: ShuYoTextStyles.title(

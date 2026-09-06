@@ -34,6 +34,49 @@ void main() {
     expect(state.currentWeek, 7);
   });
 
+  test('legacy week anchors derive the first teaching week start', () {
+    final state = ScheduleWeekState(
+      currentWeek: 7,
+      anchorMonday: DateTime(2026, 8, 31),
+    );
+
+    expect(state.firstWeekStart, DateTime(2026, 7, 20));
+  });
+
+  test('setting the first week start stores a canonical Monday anchor',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'academic.schedule.anchorWeek': 7,
+      'academic.schedule.anchorMonday': '2026-08-31T00:00:00.000',
+    });
+    final repository = AcademicScheduleRepository(
+      apiClient: _FakeAcademicScheduleApiClient(_schedule),
+    );
+
+    await repository.setFirstWeekStart(DateTime(2026, 8, 26));
+    final state = await repository.loadWeekState();
+
+    expect(state.currentWeek, 1);
+    expect(state.anchorMonday, DateTime(2026, 8, 24));
+    expect(state.firstWeekStart, DateTime(2026, 8, 24));
+    expect(
+      repository.activeWeekFromState(
+        _schedule,
+        state,
+        now: DateTime(2026, 9, 7),
+      ),
+      3,
+    );
+    expect(
+      repository.dateForWeekday(
+        state: state,
+        displayedWeek: 3,
+        weekday: DateTime.wednesday,
+      ),
+      DateTime(2026, 9, 9),
+    );
+  });
+
   test('active week can be the vacation before week one', () {
     final repository = AcademicScheduleRepository(
       apiClient: _FakeAcademicScheduleApiClient(_schedule),
