@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../core/forum_url_resolver.dart';
@@ -12,7 +13,13 @@ import 'forum_image_headers.dart';
 import 'sha1_hash.dart';
 
 class ForumImageCache {
-  ForumImageCache._(this._directory);
+  ForumImageCache._(this._directory) : _downloadOverride = null;
+
+  @visibleForTesting
+  ForumImageCache.forTesting(
+    this._directory, {
+    required Future<Uint8List> Function(String url) downloader,
+  }) : _downloadOverride = downloader;
 
   static const maxBytes = 100 * 1024 * 1024;
   static const _indexFilename = 'index.json';
@@ -22,8 +29,9 @@ class ForumImageCache {
   static bool _networkEnabled = true;
 
   final Directory _directory;
+  final Future<Uint8List> Function(String url)? _downloadOverride;
   final _entries = <String, _ForumImageEntry>{};
-  final _failedKeys = <String>{};
+  final _inFlightRequests = <String, Future<File?>>{};
   int _generation = 0;
   Future<void> _writeQueue = Future<void>.value();
   bool _loaded = false;
@@ -58,9 +66,6 @@ class ForumImageCache {
       'private:${username.toLowerCase()}';
 
   static void setNetworkEnabled(bool enabled) {
-    if (enabled && !_networkEnabled) {
-      _shared?._failedKeys.clear();
-    }
     _networkEnabled = enabled;
   }
 
@@ -93,10 +98,42 @@ class ForumImageCache {
       _entries.remove(key);
       await _saveIndex();
     }
-    if (!_networkEnabled || _failedKeys.contains(key)) {
+    if (!_networkEnabled) {
       return null;
     }
-    _failedKeys.add(key);
+
+    final inFlight = _inFlightRequests[key];
+    if (inFlight != null) {
+      final file = await inFlight;
+      if (file != null && pinned) {
+        await _pinEntry(key);
+      }
+      return file;
+    }
+
+    late final Future<File?> request;
+    request = _downloadAndStore(
+      key: key,
+      url: url,
+      variant: variant,
+      namespace: namespace,
+      pinned: pinned,
+    ).whenComplete(() {
+      if (identical(_inFlightRequests[key], request)) {
+        _inFlightRequests.remove(key);
+      }
+    });
+    _inFlightRequests[key] = request;
+    return request;
+  }
+
+  Future<File?> _downloadAndStore({
+    required String key,
+    required String url,
+    required String variant,
+    required String namespace,
+    required bool pinned,
+  }) async {
     final generation = _generation;
     try {
       final downloaded = await _download(url);
@@ -130,6 +167,15 @@ class ForumImageCache {
     }
   }
 
+  Future<void> _pinEntry(String key) async {
+    final entry = _entries[key];
+    if (entry == null || entry.pinned) {
+      return;
+    }
+    entry.pinned = true;
+    await _saveIndex();
+  }
+
   Future<int> get storageSize async {
     await _ensureLoaded();
     return _entries.values.fold<int>(0, (total, entry) => total + entry.size);
@@ -138,7 +184,6 @@ class ForumImageCache {
   Future<void> clearAll() async {
     await _ensureLoaded();
     _generation++;
-    _failedKeys.clear();
     final files = [
       for (final entry in _entries.values)
         File('${_directory.path}/${entry.filename}'),
@@ -206,6 +251,20 @@ class ForumImageCache {
   }
 
   Future<_DownloadedForumImage> _download(String url) async {
+    final downloadOverride = _downloadOverride;
+    if (downloadOverride != null) {
+      final bytes = await downloadOverride(url);
+      if (bytes.isEmpty || !_looksLikeImage(bytes, null)) {
+        throw const FormatException('invalid image response');
+      }
+      await _validateImage(bytes);
+      return _DownloadedForumImage(
+        bytes: bytes,
+        mimeType: _mimeTypeFromBytes(bytes),
+        etag: null,
+        lastModified: null,
+      );
+    }
     final uri = ForumUrlResolver.uri(url);
     final client = HttpClient();
     try {
@@ -235,10 +294,7 @@ class ForumImageCache {
       if (!_looksLikeImage(bytes, contentType)) {
         throw const FormatException('corrupt image response');
       }
-      final codec = await ui.instantiateImageCodec(bytes);
-      final frame = await codec.getNextFrame();
-      frame.image.dispose();
-      codec.dispose();
+      await _validateImage(bytes);
       return _DownloadedForumImage(
         bytes: bytes,
         mimeType: contentType ?? _mimeTypeFromBytes(bytes),
@@ -248,6 +304,13 @@ class ForumImageCache {
     } finally {
       client.close(force: true);
     }
+  }
+
+  Future<void> _validateImage(Uint8List bytes) async {
+    final codec = await ui.instantiateImageCodec(bytes);
+    final frame = await codec.getNextFrame();
+    frame.image.dispose();
+    codec.dispose();
   }
 
   Future<void> _atomicWrite(File target, Uint8List bytes) async {
