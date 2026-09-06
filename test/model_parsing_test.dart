@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shuyo/core/forum_url_resolver.dart';
 import 'package:shuyo/data/models/academic_schedule.dart';
 import 'package:shuyo/data/models/category.dart';
 import 'package:shuyo/data/models/common.dart';
@@ -374,6 +375,35 @@ void main() {
     expect(codeBlock.textBlockKind, CookedTextBlockKind.codeBlock);
     expect(codeBlock.textValue, contains('final x = 1'));
     expect(codeBlock.textValue, contains('  print(x);'));
+  });
+
+  test('ignores discourse heading anchors in direct and WebVPN modes', () {
+    addTearDown(() => ForumUrlResolver.configure(useWebVpn: false));
+    const cooked = '''
+<h2><a name="p-251-h-1" class="anchor" href="#p-251-h-1" aria-label="Heading link"></a>第一标题</h2>
+<h3><a name="p-251-h-2" class="anchor" href="https://https-bbs-shu-edu-cn-443.webvpn.shu.edu.cn/#p-251-h-2"></a>第二标题</h3>
+<h2><a href="https://example.com/real">真实链接</a></h2>
+''';
+
+    for (final useWebVpn in [false, true]) {
+      ForumUrlResolver.configure(useWebVpn: useWebVpn);
+      final segments = HtmlText.parseSegments(cooked);
+
+      expect(segments, hasLength(3));
+      expect(segments[0].textBlockKind, CookedTextBlockKind.heading);
+      expect(segments[0].headingLevel, 2);
+      expect(segments[0].textValue, '第一标题');
+      expect(segments[0].runs.every((run) => !run.isLink), isTrue);
+      expect(segments[1].headingLevel, 3);
+      expect(segments[1].textValue, '第二标题');
+      expect(segments[1].runs.every((run) => !run.isLink), isTrue);
+      expect(segments[2].textValue, '真实链接');
+      expect(segments[2].runs.single.isLink, isTrue);
+      expect(
+        HtmlText.topicPreview(cooked).text,
+        '第一标题 第二标题 真实链接',
+      );
+    }
   });
 
   test('keeps discourse lightbox images as image segments', () {
