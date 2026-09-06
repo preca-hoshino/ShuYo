@@ -110,27 +110,33 @@ class _AdvancedReplyComposerPageState extends State<AdvancedReplyComposerPage> {
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-        children: [
-          _ReplyTargetBanner(postNumber: widget.replyToPostNumber),
-          const SizedBox(height: 12),
-          AdvancedMarkdownEditor(
-            controller: _controller,
-            focusNode: _focusNode,
-            enabled: !_submitting,
-            uploading: _uploading,
-            onUploadImage: _pickAndUpload,
-            onPreview: _showPreview,
-            onInsertPoll: _insertPoll,
-            showPreviewInToolbar: false,
-            hintText: widget.replyToPostNumber == null
-                ? '写评论'
-                : '回复 #${widget.replyToPostNumber}',
-            minLines: 14,
-            maxLines: 30,
+      body: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          child: Column(
+            children: [
+              _ReplyTargetBanner(postNumber: widget.replyToPostNumber),
+              const SizedBox(height: 12),
+              Expanded(
+                child: AdvancedMarkdownEditor(
+                  controller: _controller,
+                  focusNode: _focusNode,
+                  enabled: !_submitting,
+                  uploading: _uploading,
+                  onUploadImage: _pickAndUpload,
+                  onPreview: _showPreview,
+                  onInsertPoll: _insertPoll,
+                  showPreviewInToolbar: false,
+                  hintText: widget.replyToPostNumber == null
+                      ? '写评论'
+                      : '回复 #${widget.replyToPostNumber}',
+                  expands: true,
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }

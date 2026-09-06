@@ -99,6 +99,7 @@ class _CreateTopicPageState extends State<CreateTopicPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      resizeToAvoidBottomInset: _mode != _TopicComposerMode.advanced,
       appBar: AppBar(
         title: _ComposerModeMenu(
           mode: _mode,
@@ -183,52 +184,86 @@ class _CreateTopicPageState extends State<CreateTopicPage> {
   }
 
   Widget _advancedBody(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+    final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+    final bottomSafeArea = MediaQuery.viewPaddingOf(context).bottom;
+    const horizontalPadding = 16.0;
+    const verticalSpacing = 12.0;
+    const categoryHeight = 56.0;
+    final categoryBottom = 16.0 + bottomSafeArea;
+    final categoryInset = categoryBottom + categoryHeight + verticalSpacing;
+    final keyboardEditorInset = keyboardInset + verticalSpacing;
+    final editorBottom = keyboardEditorInset > categoryInset
+        ? keyboardEditorInset
+        : categoryInset;
+
+    return Stack(
       children: [
-        TextField(
-          controller: _titleController,
-          focusNode: _titleFocusNode,
-          textInputAction: TextInputAction.next,
-          decoration: InputDecoration(
-            labelText: '标题',
-            border: const OutlineInputBorder(),
-            errorText: _titleEmojiRejected
-                ? ForumTitleRules.disallowedEmojiMessage
-                : null,
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            horizontalPadding,
+            12,
+            horizontalPadding,
+            0,
           ),
-        ),
-        const SizedBox(height: 12),
-        AdvancedMarkdownEditor(
-          controller: _rawController,
-          focusNode: _rawFocusNode,
-          enabled: !_submitting,
-          uploading: _uploading,
-          onUploadImage: _pickAndUpload,
-          onPreview: _showPreview,
-          onInsertPoll: _insertPoll,
-          showPreviewInToolbar: false,
-          minLines: 13,
-          maxLines: 28,
-        ),
-        const SizedBox(height: 12),
-        DropdownButtonFormField<int>(
-          initialValue: _categoryId,
-          decoration: const InputDecoration(
-            labelText: '分区',
-            border: OutlineInputBorder(),
-          ),
-          items: [
-            for (final category in widget.categories)
-              DropdownMenuItem(
-                value: category.id,
-                child: Text(category.name),
+          child: Column(
+            children: [
+              TextField(
+                controller: _titleController,
+                focusNode: _titleFocusNode,
+                textInputAction: TextInputAction.next,
+                decoration: InputDecoration(
+                  labelText: '标题',
+                  border: const OutlineInputBorder(),
+                  errorText: _titleEmojiRejected
+                      ? ForumTitleRules.disallowedEmojiMessage
+                      : null,
+                ),
               ),
-          ],
-          onChanged: (value) {
-            setState(() => _categoryId = value);
-            _scheduleDraftSave();
-          },
+              const SizedBox(height: verticalSpacing),
+              Expanded(
+                child: AnimatedPadding(
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeOutCubic,
+                  padding: EdgeInsets.only(bottom: editorBottom),
+                  child: AdvancedMarkdownEditor(
+                    controller: _rawController,
+                    focusNode: _rawFocusNode,
+                    enabled: !_submitting,
+                    uploading: _uploading,
+                    onUploadImage: _pickAndUpload,
+                    onPreview: _showPreview,
+                    onInsertPoll: _insertPoll,
+                    showPreviewInToolbar: false,
+                    expands: true,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Positioned(
+          left: horizontalPadding,
+          right: horizontalPadding,
+          bottom: categoryBottom,
+          height: categoryHeight,
+          child: DropdownButtonFormField<int>(
+            initialValue: _categoryId,
+            decoration: const InputDecoration(
+              labelText: '分区',
+              border: OutlineInputBorder(),
+            ),
+            items: [
+              for (final category in widget.categories)
+                DropdownMenuItem(
+                  value: category.id,
+                  child: Text(category.name),
+                ),
+            ],
+            onChanged: (value) {
+              setState(() => _categoryId = value);
+              _scheduleDraftSave();
+            },
+          ),
         ),
       ],
     );
