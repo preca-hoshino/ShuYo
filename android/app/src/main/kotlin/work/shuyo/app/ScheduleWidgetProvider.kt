@@ -99,10 +99,35 @@ abstract class ScheduleWidgetBaseProvider(
             return views
         }
 
-        val visibleCourses = todayCourses
-            .filter { it.endMinute >= nowMinute }
-            .ifEmpty { todayCourses.takeLast(rowBindings.size) }
-            .take(rowBindings.size)
+        val todayFinished = todayCourses.isNotEmpty() && upcoming == null
+        val tomorrow = today.plusDays(1)
+        val tomorrowWeek = schedule.activeWeek(tomorrow)
+        val tomorrowCourses = if (
+            todayFinished && tomorrowWeek in 1..schedule.maxWeek
+        ) {
+            schedule.courses
+                .filter { course ->
+                    course.weekday == tomorrow.dayOfWeek.value &&
+                        course.occursInWeek(tomorrowWeek)
+                }
+                .sortedWith(compareBy<WidgetCourse> { it.startMinute }.thenBy { it.name })
+        } else {
+            emptyList()
+        }
+        val showingTomorrow = tomorrowCourses.isNotEmpty()
+        val visibleCourses = if (showingTomorrow) {
+            tomorrowCourses.take(rowBindings.size)
+        } else {
+            todayCourses
+                .filter { it.endMinute >= nowMinute }
+                .take(rowBindings.size)
+        }
+        val displayWeek = if (showingTomorrow) tomorrowWeek else activeWeek
+        val displayWeekday = if (showingTomorrow) {
+            tomorrow.dayOfWeek.value
+        } else {
+            today.dayOfWeek.value
+        }
 
         views.setTextViewText(
             R.id.widget_title,
@@ -113,15 +138,26 @@ abstract class ScheduleWidgetBaseProvider(
             if (isVacation) {
                 "假期中 · ${weekdayName(today.dayOfWeek.value)}"
             } else {
-                "第${activeWeek}周 · ${weekdayName(today.dayOfWeek.value)}"
+                "第${displayWeek}周 · ${weekdayName(displayWeekday)}"
             }
         )
         views.setTextViewText(
             R.id.widget_status,
-            if (isVacation) "假期中" else statusText(todayCourses, upcoming, nowMinute)
+            if (isVacation) {
+                "假期中"
+            } else if (showingTomorrow) {
+                "明天的课程"
+            } else {
+                statusText(todayCourses, upcoming, nowMinute)
+            }
         )
         rowBindings.forEachIndexed { index, binding ->
-            bindCourseRow(views, binding, visibleCourses.getOrNull(index), nowMinute)
+            bindCourseRow(
+                views,
+                binding,
+                visibleCourses.getOrNull(index),
+                if (showingTomorrow) -1 else nowMinute
+            )
         }
         return views
     }
