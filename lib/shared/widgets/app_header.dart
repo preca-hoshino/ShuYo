@@ -27,6 +27,7 @@ class AppHeader extends StatelessWidget {
     this.onRefresh,
     this.onTitleTap,
     this.onTitleDoubleTap,
+    this.beforeSettings,
   });
 
   final String title;
@@ -49,6 +50,7 @@ class AppHeader extends StatelessWidget {
   final VoidCallback? onRefresh;
   final VoidCallback? onTitleTap;
   final VoidCallback? onTitleDoubleTap;
+  final Widget? beforeSettings;
   final VoidCallback onNotification;
 
   @override
@@ -89,6 +91,7 @@ class AppHeader extends StatelessWidget {
               ),
             ),
           ),
+          if (beforeSettings != null) beforeSettings!,
           if (showSettings)
             IconButton(
               tooltip: '设置',

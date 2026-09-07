@@ -15,6 +15,7 @@ import '../data/demo/demo_data_bundle.dart';
 import '../data/demo/demo_repositories.dart';
 import '../data/models/forum_activity.dart';
 import '../data/models/forum_notification.dart';
+import '../data/models/client_backend.dart';
 import '../data/models/topic.dart';
 import '../data/repositories/client_backend_repository.dart';
 import '../data/repositories/academic_schedule_repository.dart';
@@ -64,6 +65,7 @@ import '../shared/widgets/info_confirm_dialog.dart';
 import '../shared/widgets/app_header.dart';
 import '../shared/widgets/empty_state.dart';
 import '../shared/widgets/shuyo_launch_surface.dart';
+import '../shared/widgets/webvpn_status_indicator.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({
@@ -117,6 +119,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   static const _feedLoadMoreThrottle = Duration(milliseconds: 900);
   static const _minimumForumRefreshDuration = Duration(milliseconds: 420);
   static const _exitBackPressInterval = Duration(seconds: 2);
+  static const _webVpnStatusRefreshInterval = Duration(minutes: 5);
 
   int _tabIndex = 0;
   TopicFeedQuery _feedQuery = const TopicFeedQuery();
@@ -150,6 +153,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   bool _refreshingForumBadges = false;
   bool _checkingForumReachability = false;
   bool _checkingClientBackendPrompts = false;
+  bool _refreshingWebVpnStatus = false;
   bool _forumNetworkUnavailable = false;
   late bool _autoUseWebVpnProxy;
   late bool _hasAcademicSession;
@@ -163,9 +167,12 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   Set<String> _seenNotificationKeys = const {};
   bool _notificationSeenKeysInitialized = false;
   DateTime? _lastForumReachabilityCheck;
+  DateTime? _lastWebVpnStatusFetchAttempt;
   DateTime? _lastExitBackAt;
   String _scheduleSummaryText = '正在读取课表...';
   String _announcementSummaryText = '正在读取通知公告...';
+  WebVpnServiceStatus _webVpnServiceStatus =
+      const WebVpnServiceStatus.unknown();
   final _forumTopicListController = TopicListPageController();
   final _messagesPageController = MessagesPageController();
   final _forumRefreshIndicatorKey = GlobalKey<RefreshIndicatorState>();
@@ -341,6 +348,9 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
                     archiveView: _showArchivedMessages,
                     refreshing: _messageRefreshing,
                     notificationCount: _notificationBadgeCount,
+                    beforeSettings: _tabIndex == 0 && !widget.isDemo
+                        ? WebVpnStatusIndicator(status: _webVpnServiceStatus)
+                        : null,
                     onSearch: _openSearch,
                     onCreate: _openCreateTopic,
                     onArchive: _toggleMessageArchiveView,
@@ -529,6 +539,12 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
 
   Future<void> _refreshAfterAppResumed() async {
     unawaited(_refreshScheduleSummaryQuietly());
+    final lastStatusAttempt = _lastWebVpnStatusFetchAttempt;
+    if (lastStatusAttempt == null ||
+        DateTime.now().difference(lastStatusAttempt) >=
+            _webVpnStatusRefreshInterval) {
+      unawaited(_refreshWebVpnStatus());
+    }
     ForumRecoveryResult? recovery;
     if (_repo.hasLocalAccount && !_repo.isOnline) {
       recovery = await _recoverForumConnection();
@@ -2328,12 +2344,14 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
       return;
     }
     _checkingClientBackendPrompts = true;
+    _lastWebVpnStatusFetchAttempt = DateTime.now();
     try {
       final bootstrap =
           await _clientBackendRepository.fetchBootstrap(forceRefresh: true);
       if (!mounted) {
         return;
       }
+      setState(() => _webVpnServiceStatus = bootstrap.webVpnStatus);
       if (ClientUpdatePolicy.source == ClientUpdateSource.backend) {
         final version = bootstrap.version;
         if (version.isNewerThan(ClientAppInfo.buildNumber)) {
@@ -2389,6 +2407,32 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
       // 后端检查失败时不影响主流程。
     } finally {
       _checkingClientBackendPrompts = false;
+    }
+  }
+
+  Future<void> _refreshWebVpnStatus() async {
+    if (widget.isDemo ||
+        _refreshingWebVpnStatus ||
+        _checkingClientBackendPrompts) {
+      return;
+    }
+    _refreshingWebVpnStatus = true;
+    _lastWebVpnStatusFetchAttempt = DateTime.now();
+    try {
+      final bootstrap =
+          await _clientBackendRepository.fetchBootstrap(forceRefresh: true);
+      if (!mounted) return;
+      setState(() => _webVpnServiceStatus = bootstrap.webVpnStatus);
+    } on Object {
+      // A backend failure means the status is unknown, not that WebVPN is down.
+      if (mounted &&
+          !_webVpnServiceStatus.isFreshAt(DateTime.now())) {
+        setState(
+          () => _webVpnServiceStatus = const WebVpnServiceStatus.unknown(),
+        );
+      }
+    } finally {
+      _refreshingWebVpnStatus = false;
     }
   }
 

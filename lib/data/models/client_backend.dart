@@ -1,5 +1,63 @@
 import 'common.dart';
 
+enum WebVpnServiceState { available, degraded, unavailable, unknown }
+
+class WebVpnServiceStatus {
+  const WebVpnServiceStatus({
+    required this.state,
+    required this.checkedAt,
+    required this.statusSince,
+    required this.lastSuccessAt,
+    required this.latencyMs,
+    required this.reason,
+  });
+
+  const WebVpnServiceStatus.unknown()
+      : state = WebVpnServiceState.unknown,
+        checkedAt = null,
+        statusSince = null,
+        lastSuccessAt = null,
+        latencyMs = null,
+        reason = 'unknown';
+
+  static const freshness = Duration(minutes: 5);
+
+  final WebVpnServiceState state;
+  final DateTime? checkedAt;
+  final DateTime? statusSince;
+  final DateTime? lastSuccessAt;
+  final int? latencyMs;
+  final String reason;
+
+  bool isFreshAt(DateTime now) {
+    final checked = checkedAt;
+    return checked != null &&
+        !checked.isAfter(now.add(const Duration(minutes: 1))) &&
+        now.difference(checked) <= freshness;
+  }
+
+  WebVpnServiceState effectiveStateAt(DateTime now) =>
+      isFreshAt(now) ? state : WebVpnServiceState.unknown;
+
+  factory WebVpnServiceStatus.fromJson(JsonMap json) {
+    final state = switch (stringValue(json['status']).toLowerCase()) {
+      'available' => WebVpnServiceState.available,
+      'degraded' => WebVpnServiceState.degraded,
+      'unavailable' => WebVpnServiceState.unavailable,
+      _ => WebVpnServiceState.unknown,
+    };
+    final rawLatency = json['latencyMs'];
+    return WebVpnServiceStatus(
+      state: state,
+      checkedAt: dateValue(json['checkedAt']),
+      statusSince: dateValue(json['statusSince']),
+      lastSuccessAt: dateValue(json['lastSuccessAt']),
+      latencyMs: rawLatency is num ? rawLatency.round() : null,
+      reason: stringValue(json['reason'], 'unknown'),
+    );
+  }
+}
+
 class ClientAnnouncement {
   const ClientAnnouncement({
     required this.id,
@@ -95,15 +153,18 @@ class ClientBootstrapInfo {
   const ClientBootstrapInfo({
     required this.version,
     required this.latestAnnouncement,
+    required this.webVpnStatus,
   });
 
   final ClientUpdateInfo version;
   final ClientAnnouncement? latestAnnouncement;
+  final WebVpnServiceStatus webVpnStatus;
 
   factory ClientBootstrapInfo.fromJson(JsonMap json) {
     final data = json['data'];
     final map = data is JsonMap ? data : const <String, dynamic>{};
     final announcementJson = map['latestAnnouncement'];
+    final webVpnStatusJson = map['webVpnStatus'];
     return ClientBootstrapInfo(
       version: ClientUpdateInfo.fromJson(
         map['version'] is JsonMap ? map['version'] as JsonMap : map,
@@ -111,6 +172,9 @@ class ClientBootstrapInfo {
       latestAnnouncement: announcementJson is JsonMap
           ? ClientAnnouncement.fromJson(announcementJson)
           : null,
+      webVpnStatus: webVpnStatusJson is JsonMap
+          ? WebVpnServiceStatus.fromJson(webVpnStatusJson)
+          : const WebVpnServiceStatus.unknown(),
     );
   }
 }
