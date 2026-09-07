@@ -44,9 +44,16 @@ jobs:
           release_tag="v${version_name}"
           apk_name="ShuYo-v${version_name}.apk"
 
+          tag_exists=false
           if git rev-parse --verify --quiet "refs/tags/${release_tag}" >/dev/null; then
-            echo "Tag ${release_tag} already exists. Update pubspec.yaml before releasing again."
-            exit 1
+            tag_exists=true
+            tag_commit="$(git rev-list -n 1 "$release_tag")"
+            if [[ "$tag_commit" != "$GITHUB_SHA" ]]; then
+              echo "Tag ${release_tag} points to ${tag_commit}, not this commit (${GITHUB_SHA})."
+              echo "Update pubspec.yaml before releasing changed code."
+              exit 1
+            fi
+            echo "Tag ${release_tag} already points to this commit; it can be reused."
           fi
 
           echo "app_version=${app_version}" >> "$GITHUB_OUTPUT"
@@ -54,6 +61,33 @@ jobs:
           echo "build_number=${build_number}" >> "$GITHUB_OUTPUT"
           echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
           echo "apk_name=${apk_name}" >> "$GITHUB_OUTPUT"
+          echo "tag_exists=${tag_exists}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare release notes
+        id: notes
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          previous_tag=""
+          while IFS= read -r candidate; do
+            if [[ "$candidate" != "$RELEASE_TAG" ]]; then
+              previous_tag="$candidate"
+              break
+            fi
+          done < <(git tag --merged "$GITHUB_SHA" --sort=-version:refname)
+
+          if [[ -n "$previous_tag" ]]; then
+            changelog_url="https://github.com/${GITHUB_REPOSITORY}/compare/${previous_tag}...${RELEASE_TAG}"
+            notes="Full changelog: [${previous_tag}...${RELEASE_TAG}](${changelog_url})"
+          else
+            changelog_url="https://github.com/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}"
+            notes="Full commit history: [View all commits](${changelog_url})"
+          fi
+
+          echo "notes=${notes}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -153,23 +187,33 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
           VERSION_NAME: ${{ steps.version.outputs.version_name }}
+          TAG_EXISTS: ${{ steps.version.outputs.tag_exists }}
+          RELEASE_NOTES: ${{ steps.notes.outputs.notes }}
           APK_PATH: ${{ steps.asset.outputs.apk_path }}
           CHECKSUM_PATH: ${{ steps.asset.outputs.checksum_path }}
         run: |
           set -euo pipefail
 
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $RELEASE_TAG already exists. Update pubspec.yaml before releasing again."
+            echo "Release $RELEASE_TAG already exists. Edit or delete that release, or update pubspec.yaml."
             exit 1
           fi
 
-          gh release create "$RELEASE_TAG" \
-            "$APK_PATH" \
-            "$CHECKSUM_PATH" \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "ShuYo $RELEASE_TAG" \
-            --generate-notes
+          release_args=(
+            "$RELEASE_TAG"
+            "$APK_PATH"
+            "$CHECKSUM_PATH"
+            --repo "$GITHUB_REPOSITORY"
+            --title "ShuYo $RELEASE_TAG"
+            --notes "$RELEASE_NOTES"
+          )
+          if [[ "$TAG_EXISTS" == "true" ]]; then
+            release_args+=(--verify-tag)
+          else
+            release_args+=(--target "$GITHUB_SHA")
+          fi
+
+          gh release create "${release_args[@]}"
 
       - name: Remove signing files
         if: always()
