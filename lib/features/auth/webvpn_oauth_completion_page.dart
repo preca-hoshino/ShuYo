@@ -8,6 +8,7 @@ import 'package:webview_flutter_android/webview_flutter_android.dart';
 import '../../core/academic_constants.dart';
 import '../../core/academic_url_resolver.dart';
 import '../../core/client_user_agent.dart';
+import '../../data/services/http_timeout.dart';
 
 @visibleForTesting
 bool hasWebVpnNavigationProgressed(String? failedUrl, String? currentUrl) {
@@ -165,7 +166,7 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
       (_) => unawaited(_checkLoginCookie()),
     );
     _timeoutTimer = Timer(
-      const Duration(seconds: 75),
+      HttpTimeout.oauthCompletion,
       () => _fail('建立教务系统登录会话超时，请返回后重新登录'),
     );
   }

@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import '../../core/forum_url_resolver.dart';
 import '../models/common.dart';
 import 'forum_image_headers.dart';
+import 'http_timeout.dart';
 import 'sha1_hash.dart';
 
 class ForumImageCache {
@@ -268,42 +269,58 @@ class ForumImageCache {
     final uri = ForumUrlResolver.uri(url);
     final client = HttpClient();
     try {
-      final request =
-          await client.getUrl(uri).timeout(const Duration(seconds: 12));
-      final headers = await ForumImageHeaders.forUrl(url);
-      headers?.forEach(request.headers.set);
-      final response =
-          await request.close().timeout(const Duration(seconds: 20));
-      final contentType = response.headers.contentType?.mimeType;
-      final bytes = await response.fold<BytesBuilder>(
-        BytesBuilder(copy: false),
-        (builder, chunk) {
-          builder.add(chunk);
-          return builder;
+      client.connectionTimeout = HttpTimeout.connect;
+      return await _downloadWithClient(client, uri, url).timeout(
+        HttpTimeout.transfer,
+        onTimeout: () {
+          client.close(force: true);
+          throw TimeoutException('论坛图片下载超时', HttpTimeout.transfer);
         },
-      ).then((builder) => builder.takeBytes());
-      if (response.statusCode < 200 ||
-          response.statusCode >= 300 ||
-          bytes.isEmpty) {
-        throw const FormatException('invalid image response');
-      }
-      if (contentType != null &&
-          !contentType.toLowerCase().startsWith('image/')) {
-        throw const FormatException('non-image response');
-      }
-      if (!_looksLikeImage(bytes, contentType)) {
-        throw const FormatException('corrupt image response');
-      }
-      await _validateImage(bytes);
-      return _DownloadedForumImage(
-        bytes: bytes,
-        mimeType: contentType ?? _mimeTypeFromBytes(bytes),
-        etag: response.headers.value(HttpHeaders.etagHeader),
-        lastModified: response.headers.value(HttpHeaders.lastModifiedHeader),
       );
     } finally {
       client.close(force: true);
     }
+  }
+
+  Future<_DownloadedForumImage> _downloadWithClient(
+    HttpClient client,
+    Uri uri,
+    String originalUrl,
+  ) async {
+    final request = await client.getUrl(uri).timeout(HttpTimeout.connect);
+    final headers = await ForumImageHeaders.forUrl(originalUrl);
+    headers?.forEach(request.headers.set);
+    final response = await request.close().timeout(HttpTimeout.normal);
+    final contentType = response.headers.contentType?.mimeType;
+    final bytes = await response
+        .timeout(HttpTimeout.streamIdle)
+        .fold<BytesBuilder>(
+          BytesBuilder(copy: false),
+          (builder, chunk) {
+            builder.add(chunk);
+            return builder;
+          },
+        )
+        .then((builder) => builder.takeBytes());
+    if (response.statusCode < 200 ||
+        response.statusCode >= 300 ||
+        bytes.isEmpty) {
+      throw const FormatException('invalid image response');
+    }
+    if (contentType != null &&
+        !contentType.toLowerCase().startsWith('image/')) {
+      throw const FormatException('non-image response');
+    }
+    if (!_looksLikeImage(bytes, contentType)) {
+      throw const FormatException('corrupt image response');
+    }
+    await _validateImage(bytes);
+    return _DownloadedForumImage(
+      bytes: bytes,
+      mimeType: contentType ?? _mimeTypeFromBytes(bytes),
+      etag: response.headers.value(HttpHeaders.etagHeader),
+      lastModified: response.headers.value(HttpHeaders.lastModifiedHeader),
+    );
   }
 
   Future<void> _validateImage(Uint8List bytes) async {

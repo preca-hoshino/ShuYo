@@ -66,7 +66,15 @@ class AcademicScheduleApiClient {
     return IOClient(HttpClient());
   }
 
-  Future<AcademicSchedule> fetchCurrentSchedule() async {
+  Future<AcademicSchedule> fetchCurrentSchedule() {
+    return HttpTimeout.request(
+      _fetchCurrentSchedule(),
+      timeout: HttpTimeout.composed,
+      message: '课表同步超时，请稍后再试',
+    );
+  }
+
+  Future<AcademicSchedule> _fetchCurrentSchedule() async {
     _debug(
         'sync start mode=${AcademicUrlResolver.usesWebVpn ? 'webvpn' : 'direct'}');
     try {

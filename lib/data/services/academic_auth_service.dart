@@ -10,6 +10,7 @@ import '../../core/academic_constants.dart';
 import '../../core/academic_url_resolver.dart';
 import '../../core/client_user_agent.dart';
 import '../../core/forum_url_resolver.dart';
+import 'http_timeout.dart';
 
 enum WebVpnSessionStatus { valid, loginRequired, unavailable }
 
@@ -166,7 +167,7 @@ class AcademicAuthService {
         .join('; ');
     if (header.isEmpty) return WebVpnSessionStatus.loginRequired;
     return _directSessionValidator(header).timeout(
-      const Duration(seconds: 15),
+      HttpTimeout.normal,
       onTimeout: () => WebVpnSessionStatus.unavailable,
     );
   }
@@ -174,12 +175,16 @@ class AcademicAuthService {
   Future<WebVpnSessionStatus> _validateDirectAcademicSessionOverNetwork(
     String cookieHeader,
   ) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+    final client = HttpClient()..connectionTimeout = HttpTimeout.connect;
+    final deadline = Timer(
+      HttpTimeout.normal,
+      () => client.close(force: true),
+    );
     var current = AcademicUrlResolver.homeUri;
     try {
       for (var redirectCount = 0; redirectCount < 10; redirectCount++) {
         final request = await client.getUrl(current).timeout(
-              const Duration(seconds: 5),
+              HttpTimeout.connect,
             );
         request.followRedirects = false;
         request.headers
@@ -190,12 +195,10 @@ class AcademicAuthService {
         if (current.host == AcademicConstants.host) {
           request.headers.set(HttpHeaders.cookieHeader, cookieHeader);
         }
-        final response = await request.close().timeout(
-              const Duration(seconds: 7),
-            );
+        final response = await request.close().timeout(HttpTimeout.normal);
         final location = response.headers.value(HttpHeaders.locationHeader);
         final statusCode = response.statusCode;
-        await response.drain<void>().timeout(const Duration(seconds: 7));
+        await response.drain<void>().timeout(HttpTimeout.normal);
         _debug(
           'direct validation hop=$redirectCount status=$statusCode '
           'uri=${_describeUri(current)} '
@@ -240,6 +243,7 @@ class AcademicAuthService {
       _debug('direct validation failed: ${error.runtimeType}');
       return WebVpnSessionStatus.unavailable;
     } finally {
+      deadline.cancel();
       client.close(force: true);
     }
   }
@@ -278,7 +282,10 @@ class AcademicAuthService {
       _debug('session validation: empty portal cookie header');
       return WebVpnSessionStatus.loginRequired;
     }
-    final status = await _webVpnSessionValidator(header);
+    final status = await _webVpnSessionValidator(header).timeout(
+      HttpTimeout.normal,
+      onTimeout: () => WebVpnSessionStatus.unavailable,
+    );
     _debug(
       'session validation=${status.name} '
       '${_describeCookieSources(cached: cached, live: live)}',
@@ -289,24 +296,26 @@ class AcademicAuthService {
   Future<WebVpnSessionStatus> _validateWebVpnSessionOverNetwork(
     String cookieHeader,
   ) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+    final client = HttpClient()..connectionTimeout = HttpTimeout.connect;
+    final deadline = Timer(
+      HttpTimeout.normal,
+      () => client.close(force: true),
+    );
     var current = Uri.parse('${ForumUrlResolver.webVpnBaseUrl}/latest');
     try {
       for (var redirectCount = 0; redirectCount < 10; redirectCount++) {
         final request = await client.getUrl(current).timeout(
-              const Duration(seconds: 5),
+              HttpTimeout.connect,
             );
         request.followRedirects = false;
         request.headers
           ..set(HttpHeaders.acceptHeader, 'text/html,application/xhtml+xml')
           ..set(HttpHeaders.userAgentHeader, ClientUserAgent.mobileBrowser)
           ..set(HttpHeaders.cookieHeader, cookieHeader);
-        final response = await request.close().timeout(
-              const Duration(seconds: 7),
-            );
+        final response = await request.close().timeout(HttpTimeout.normal);
         final location = response.headers.value(HttpHeaders.locationHeader);
         final statusCode = response.statusCode;
-        await response.drain<void>().timeout(const Duration(seconds: 7));
+        await response.drain<void>().timeout(HttpTimeout.normal);
         _debug(
           'webvpn validation hop=$redirectCount status=$statusCode '
           'uri=${_describeUri(current)} '
@@ -343,6 +352,7 @@ class AcademicAuthService {
       _debug('webvpn validation failed: ${error.runtimeType}');
       return WebVpnSessionStatus.unavailable;
     } finally {
+      deadline.cancel();
       client.close(force: true);
     }
   }

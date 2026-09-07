@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter/services.dart';
 
 import 'forum_image_headers.dart';
+import 'http_timeout.dart';
 
 class ImageSaver {
   const ImageSaver._();
@@ -26,32 +27,42 @@ class ImageSaver {
   static Future<_DownloadedImage> _download(Uri uri) async {
     final client = HttpClient();
     try {
-      final request = await client.getUrl(uri).timeout(
-            const Duration(seconds: 12),
-          );
-      final headers = await ForumImageHeaders.forUrl(uri.toString());
-      headers?.forEach(request.headers.set);
-      final response = await request.close().timeout(
-            const Duration(seconds: 20),
-          );
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw Exception('图片下载失败 (${response.statusCode})');
-      }
-      final builder = BytesBuilder(copy: false);
-      await for (final chunk in response) {
-        builder.add(chunk);
-      }
-      final bytes = builder.takeBytes();
-      if (bytes.isEmpty) {
-        throw Exception('图片内容为空');
-      }
-      return _DownloadedImage(
-        bytes: bytes,
-        mimeType: response.headers.contentType?.mimeType,
+      client.connectionTimeout = HttpTimeout.connect;
+      return await _downloadWithClient(client, uri).timeout(
+        HttpTimeout.transfer,
+        onTimeout: () {
+          client.close(force: true);
+          throw TimeoutException('图片下载超时', HttpTimeout.transfer);
+        },
       );
     } finally {
       client.close(force: true);
     }
+  }
+
+  static Future<_DownloadedImage> _downloadWithClient(
+    HttpClient client,
+    Uri uri,
+  ) async {
+    final request = await client.getUrl(uri).timeout(HttpTimeout.connect);
+    final headers = await ForumImageHeaders.forUrl(uri.toString());
+    headers?.forEach(request.headers.set);
+    final response = await request.close().timeout(HttpTimeout.normal);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('图片下载失败 (${response.statusCode})');
+    }
+    final builder = BytesBuilder(copy: false);
+    await for (final chunk in response.timeout(HttpTimeout.streamIdle)) {
+      builder.add(chunk);
+    }
+    final bytes = builder.takeBytes();
+    if (bytes.isEmpty) {
+      throw Exception('图片内容为空');
+    }
+    return _DownloadedImage(
+      bytes: bytes,
+      mimeType: response.headers.contentType?.mimeType,
+    );
   }
 
   static String _filenameFor(Uri uri, String mimeType) {

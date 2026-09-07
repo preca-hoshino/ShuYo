@@ -91,6 +91,15 @@ class DiscourseApiClient {
   Future<JsonMap> getTrackedTopicJson(
     String path, {
     required int topicId,
+  }) {
+    return _runComposed(
+      () => _getTrackedTopicJson(path, topicId: topicId),
+    );
+  }
+
+  Future<JsonMap> _getTrackedTopicJson(
+    String path, {
+    required int topicId,
   }) async {
     final uri = _uri(path);
     final headers = await _headers(
@@ -109,7 +118,11 @@ class DiscourseApiClient {
     return _decode(response);
   }
 
-  Future<JsonMap> postForm(String path, String body) async {
+  Future<JsonMap> postForm(String path, String body) {
+    return _runComposed(() => _postForm(path, body));
+  }
+
+  Future<JsonMap> _postForm(String path, String body) async {
     final uri = _uri(path);
     final headers = await _headers(
       csrfToken: await _csrf(),
@@ -127,7 +140,11 @@ class DiscourseApiClient {
     return _decode(response);
   }
 
-  Future<JsonMap> putForm(String path, String body) async {
+  Future<JsonMap> putForm(String path, String body) {
+    return _runComposed(() => _putForm(path, body));
+  }
+
+  Future<JsonMap> _putForm(String path, String body) async {
     final uri = _uri(path);
     final headers = await _headers(
       csrfToken: await _csrf(),
@@ -145,7 +162,11 @@ class DiscourseApiClient {
     return _decode(response);
   }
 
-  Future<JsonMap> deleteForm(String path, String body) async {
+  Future<JsonMap> deleteForm(String path, String body) {
+    return _runComposed(() => _deleteForm(path, body));
+  }
+
+  Future<JsonMap> _deleteForm(String path, String body) async {
     final uri = _uri(path);
     final headers = await _headers(
       csrfToken: await _csrf(),
@@ -169,6 +190,26 @@ class DiscourseApiClient {
     required String fileField,
     required Uint8List fileBytes,
     required String filename,
+  }) {
+    return HttpTimeout.request(
+      _postMultipart(
+        path: path,
+        fields: fields,
+        fileField: fileField,
+        fileBytes: fileBytes,
+        filename: filename,
+      ),
+      timeout: HttpTimeout.transfer,
+      message: '论坛上传超时，请稍后再试',
+    );
+  }
+
+  Future<JsonMap> _postMultipart({
+    required String path,
+    required Map<String, String> fields,
+    required String fileField,
+    required Uint8List fileBytes,
+    required String filename,
   }) async {
     final uri = _uri(path);
     final request = http.MultipartRequest('POST', uri);
@@ -183,16 +224,24 @@ class DiscourseApiClient {
     );
     final streamed = await HttpTimeout.request(
       _send(() => _httpClient.send(request)),
-      timeout: HttpTimeout.upload,
+      timeout: HttpTimeout.transfer,
       message: '论坛上传超时，请稍后再试',
     );
     final response = await HttpTimeout.request(
       http.Response.fromStream(streamed),
-      timeout: HttpTimeout.upload,
+      timeout: HttpTimeout.transfer,
       message: '论坛上传超时，请稍后再试',
     );
     await _storeResponseCookies(uri, response);
     return _decode(response);
+  }
+
+  Future<T> _runComposed<T>(Future<T> Function() operation) {
+    return HttpTimeout.request(
+      operation(),
+      timeout: HttpTimeout.composed,
+      message: '论坛操作超时，请稍后再试',
+    );
   }
 
   Future<void> _storeResponseCookies(

@@ -25,6 +25,7 @@ import '../services/forum_auth_service.dart';
 import '../services/forum_account_snapshot.dart';
 import '../services/forum_image_cache.dart';
 import '../services/html_text.dart';
+import '../services/http_timeout.dart';
 import '../services/payload_factory.dart';
 import '../services/forum_persistent_cache.dart';
 import '../services/sha1_hash.dart';
@@ -2305,8 +2306,8 @@ List<ForumCategory> _sortedCategories(Map<int, ForumCategory> categories) {
 class ForumRepositoryFactory {
   const ForumRepositoryFactory._();
 
-  static const _startupOnlineTimeout = Duration(seconds: 5);
-  static const _requiredOnlineTimeout = Duration(seconds: 10);
+  static const _startupOnlineTimeout = HttpTimeout.connect;
+  static const _requiredOnlineTimeout = HttpTimeout.normal;
 
   static Future<ForumRepository> load() async {
     await _configureForumAccessMode();

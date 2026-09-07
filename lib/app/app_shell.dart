@@ -33,6 +33,7 @@ import '../data/services/forum_image_headers.dart';
 import '../data/services/forum_image_cache.dart';
 import '../data/services/forum_reachability_service.dart';
 import '../data/services/forum_auth_service.dart';
+import '../data/services/http_timeout.dart';
 import '../features/auth/native_login_page.dart';
 import '../features/forum/create_topic_page.dart';
 import '../features/forum/forum_filter_bar.dart';
@@ -111,7 +112,7 @@ class AppShell extends StatefulWidget {
 }
 
 class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
-  static const _forumAccessModeReloadTimeout = Duration(seconds: 12);
+  static const _forumAccessModeReloadTimeout = HttpTimeout.normal;
   static const _forumBadgeRefreshInterval = Duration(seconds: 90);
   static const _feedLoadMoreThrottle = Duration(milliseconds: 900);
   static const _minimumForumRefreshDuration = Duration(milliseconds: 420);
@@ -278,7 +279,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     if (mounted) setState(() => _hasAcademicSession = true);
     _syncOnboardingAccountStatus();
     await _persistAcademicLoginCookies();
-    await _syncScheduleAfterWebVpnLogin();
+    await _syncScheduleAfterWebVpnLogin(sessionAlreadyPrepared: true);
   }
 
   Future<void> _persistAcademicLoginCookies() async {
@@ -1062,7 +1063,9 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     }
   }
 
-  Future<bool> _syncScheduleAfterWebVpnLogin() async {
+  Future<bool> _syncScheduleAfterWebVpnLogin({
+    bool sessionAlreadyPrepared = false,
+  }) async {
     if (widget.isDemo) {
       return false;
     }
@@ -1076,7 +1079,8 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
       setState(() => _scheduleSummaryText = '课表获取中...');
     }
     try {
-      final prepared = await _prepareAcademicWebVpnSessionInBackground();
+      final prepared = sessionAlreadyPrepared ||
+          await _prepareAcademicWebVpnSessionInBackground();
       _debugAcademicFlow('background preparation result=$prepared');
       if (!prepared) {
         final summary = await _scheduleRepository.homeSummary();
@@ -1149,7 +1153,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     });
     try {
       return await completer.future.timeout(
-        const Duration(seconds: 75),
+        HttpTimeout.webViewPreparation,
         onTimeout: () {
           _debugAcademicFlow('background preparation timed out');
           return false;
@@ -1181,7 +1185,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     final existing = _forumWebVpnPreloadCompleter;
     if (existing != null) {
       return existing.future.timeout(
-        const Duration(seconds: 12),
+        HttpTimeout.normal,
         onTimeout: () => ForumWebVpnPreparationResult.unavailable,
       );
     }
@@ -1192,7 +1196,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     });
     try {
       return await completer.future.timeout(
-        const Duration(seconds: 12),
+        HttpTimeout.normal,
         onTimeout: () => ForumWebVpnPreparationResult.unavailable,
       );
     } finally {
@@ -2503,7 +2507,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     setState(() => _hasAcademicSession = true);
     _syncOnboardingAccountStatus();
     await _persistAcademicLoginCookies();
-    await _syncScheduleAfterWebVpnLogin();
+    await _syncScheduleAfterWebVpnLogin(sessionAlreadyPrepared: true);
   }
 
   void _debugAcademicFlow(String message, {StackTrace? stackTrace}) {

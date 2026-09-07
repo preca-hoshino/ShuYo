@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -9,6 +10,7 @@ import '../../core/academic_url_resolver.dart';
 import '../../core/client_user_agent.dart';
 import '../../core/forum_url_resolver.dart';
 import 'academic_auth_service.dart';
+import 'http_timeout.dart';
 
 enum AcademicVerificationMethod { wecom, sms }
 
@@ -61,7 +63,7 @@ class AcademicNativeAuthService {
       : _target = _NativeAuthTarget.academic,
         _cookieManager = WebViewCookieManager(),
         _client = httpClient ?? HttpClient() {
-    _client.connectionTimeout = const Duration(seconds: 20);
+    _client.connectionTimeout = HttpTimeout.connect;
   }
 
   AcademicNativeAuthService.forForum({
@@ -70,7 +72,7 @@ class AcademicNativeAuthService {
   })  : _target = _NativeAuthTarget.forum,
         _cookieManager = cookieManager ?? WebViewCookieManager(),
         _client = httpClient ?? HttpClient() {
-    _client.connectionTimeout = const Duration(seconds: 20);
+    _client.connectionTimeout = HttpTimeout.connect;
   }
 
   static const _newssoPathMarker = '/oauth2/login/';
@@ -262,6 +264,17 @@ class AcademicNativeAuthService {
   Future<AcademicLoginResult> login({
     required String username,
     required String password,
+  }) {
+    return _runAuthenticationStage(
+      'credentials',
+      HttpTimeout.authentication,
+      () => _login(username: username, password: password),
+    );
+  }
+
+  Future<AcademicLoginResult> _login({
+    required String username,
+    required String password,
   }) async {
     _clearChallenge();
     final loginUri = await _discoverLoginUri();
@@ -316,7 +329,15 @@ class AcademicNativeAuthService {
     return AcademicLoginResult(callbackUri: callbackUri);
   }
 
-  Future<void> sendCode(AcademicVerificationMethod method) async {
+  Future<void> sendCode(AcademicVerificationMethod method) {
+    return _runAuthenticationStage(
+      'send-code',
+      HttpTimeout.normal,
+      () => _sendCode(method),
+    );
+  }
+
+  Future<void> _sendCode(AcademicVerificationMethod method) async {
     final loginUri = _requireChallenge();
     final response = await _jsonRequest(
       'POST',
@@ -328,6 +349,17 @@ class AcademicNativeAuthService {
   }
 
   Future<Uri> verifyCode({
+    required AcademicVerificationMethod method,
+    required String code,
+  }) {
+    return _runAuthenticationStage(
+      'verify-code',
+      HttpTimeout.normal,
+      () => _verifyCode(method: method, code: code),
+    );
+  }
+
+  Future<Uri> _verifyCode({
     required AcademicVerificationMethod method,
     required String code,
   }) async {
@@ -376,7 +408,7 @@ class AcademicNativeAuthService {
         );
       }
       final next = _redirectTarget(response, uri);
-      await response.drain<void>();
+      await response.drain<void>().timeout(HttpTimeout.normal);
       if (next == null) {
         if (uri.path.contains(_newssoPathMarker)) return uri;
         if (_target == _NativeAuthTarget.academic && uri.host == _webVpnHost) {
@@ -399,7 +431,7 @@ class AcademicNativeAuthService {
       if (next.path.contains(_newssoPathMarker)) {
         final loginPage = await _request('GET', next);
         final loginRedirect = _redirectTarget(loginPage, next);
-        await loginPage.drain<void>();
+        await loginPage.drain<void>().timeout(HttpTimeout.normal);
         return loginRedirect ?? next;
       }
       uri = next;
@@ -479,7 +511,7 @@ class AcademicNativeAuthService {
       body: body == null ? null : jsonEncode(body),
       referer: referer,
     );
-    final text = await utf8.decodeStream(response);
+    final text = await utf8.decodeStream(response).timeout(HttpTimeout.normal);
     Map<String, dynamic> json;
     try {
       json = jsonDecode(text) as Map<String, dynamic>;
@@ -569,7 +601,15 @@ class AcademicNativeAuthService {
     Uri? referer,
   }) async {
     _validateUri(uri);
-    final request = await _client.openUrl(method, uri);
+    if (kDebugMode) {
+      debugPrint(
+        '[SHU_AUTH] native request-start method=$method '
+        'uri=${uri.host}${uri.path}',
+      );
+    }
+    final request = await _client.openUrl(method, uri).timeout(
+          HttpTimeout.connect,
+        );
     request.followRedirects = false;
     request.headers
         .set(HttpHeaders.acceptHeader, 'application/json, text/plain, */*');
@@ -587,7 +627,15 @@ class AcademicNativeAuthService {
       request.headers.contentType = ContentType.json;
       request.write(body);
     }
-    final response = await request.close();
+    late final HttpClientResponse response;
+    try {
+      response = await request.close().timeout(HttpTimeout.normal);
+    } on TimeoutException {
+      request.abort(
+        TimeoutException('学校认证服务请求超时', HttpTimeout.normal),
+      );
+      rethrow;
+    }
     if (kDebugMode) {
       final setCookieNames = response.cookies
           .map((cookie) => cookie.name)
@@ -603,6 +651,58 @@ class AcademicNativeAuthService {
     }
     _saveCookies(uri, response.cookies);
     return response;
+  }
+
+  Future<T> _runAuthenticationStage<T>(
+    String stage,
+    Duration timeout,
+    Future<T> Function() operation,
+  ) async {
+    if (kDebugMode) {
+      debugPrint(
+        '[SHU_AUTH] stage-start target=${_target.name} stage=$stage '
+        'timeoutMs=${timeout.inMilliseconds}',
+      );
+    }
+    try {
+      final result = await operation().timeout(timeout);
+      if (kDebugMode) {
+        debugPrint(
+          '[SHU_AUTH] stage-complete target=${_target.name} stage=$stage',
+        );
+      }
+      return result;
+    } on TimeoutException catch (error, stackTrace) {
+      if (kDebugMode) {
+        debugPrint(
+          '[SHU_AUTH] stage-timeout target=${_target.name} stage=$stage '
+          'error=$error',
+        );
+        debugPrintStack(label: '[SHU_AUTH] stack', stackTrace: stackTrace);
+      }
+      throw const AcademicNativeAuthException(
+        'timeout',
+        '连接学校认证服务超时，请稍后重试',
+      );
+    } on AcademicNativeAuthException catch (error, stackTrace) {
+      if (kDebugMode) {
+        debugPrint(
+          '[SHU_AUTH] stage-rejected target=${_target.name} stage=$stage '
+          'code=${error.code}',
+        );
+        debugPrintStack(label: '[SHU_AUTH] stack', stackTrace: stackTrace);
+      }
+      rethrow;
+    } on Object catch (error, stackTrace) {
+      if (kDebugMode) {
+        debugPrint(
+          '[SHU_AUTH] stage-failed target=${_target.name} stage=$stage '
+          'type=${error.runtimeType} error=$error',
+        );
+        debugPrintStack(label: '[SHU_AUTH] stack', stackTrace: stackTrace);
+      }
+      rethrow;
+    }
   }
 
   Uri? _redirectTarget(HttpClientResponse response, Uri current) {

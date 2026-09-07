@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import '../../core/forum_constants.dart';
+import 'http_timeout.dart';
 
 enum ForumReachabilityStatus {
   reachable,
@@ -25,7 +26,7 @@ class ForumReachabilityResult {
 
 class ForumReachabilityService {
   const ForumReachabilityService({
-    this.timeout = const Duration(seconds: 3),
+    this.timeout = HttpTimeout.probe,
   });
 
   final Duration timeout;
@@ -38,12 +39,7 @@ class ForumReachabilityService {
       };
     }
     try {
-      final request = await client
-          .getUrl(Uri.parse(ForumConstants.baseUrl))
-          .timeout(timeout);
-      request.followRedirects = false;
-      final response = await request.close().timeout(timeout);
-      await response.drain<void>();
+      await _probe(client).timeout(timeout);
       return const ForumReachabilityResult(
         status: ForumReachabilityStatus.reachable,
       );
@@ -70,5 +66,12 @@ class ForumReachabilityService {
     } finally {
       client.close(force: true);
     }
+  }
+
+  Future<void> _probe(HttpClient client) async {
+    final request = await client.getUrl(Uri.parse(ForumConstants.baseUrl));
+    request.followRedirects = false;
+    final response = await request.close();
+    await response.drain<void>();
   }
 }

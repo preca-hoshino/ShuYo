@@ -11,6 +11,7 @@ import '../../core/client_user_agent.dart';
 import '../../core/forum_url_resolver.dart';
 import '../../data/services/discourse_api_client.dart';
 import '../../data/services/forum_auth_service.dart';
+import '../../data/services/http_timeout.dart';
 
 enum ForumOAuthCompletionResult { loggedIn }
 
@@ -229,10 +230,7 @@ class _ForumOAuthCompletionPageState extends State<ForumOAuthCompletionPage> {
       const Duration(milliseconds: 800),
       (_) => unawaited(_checkSession()),
     );
-    _timeoutTimer = Timer(
-      const Duration(seconds: 75),
-      () => _fail('建立乐乎论坛登录会话超时，请返回后重新登录'),
-    );
+    _armCompletionTimeout();
   }
 
   Future<void> _configureAndroidWebView() async {
@@ -261,11 +259,16 @@ class _ForumOAuthCompletionPageState extends State<ForumOAuthCompletionPage> {
     }
     if (_isForumRegistrationFlowUri(uri)) {
       if (!_registrationActive && mounted) {
+        _timeoutTimer?.cancel();
+        _timeoutTimer = null;
         setState(() => _registrationActive = true);
       }
     }
     if (_registrationActive && isForumRegistrationCompletionUri(uri)) {
-      _registrationCompletionReached = true;
+      if (!_registrationCompletionReached) {
+        _registrationCompletionReached = true;
+        _armCompletionTimeout();
+      }
       if (kDebugMode) {
         debugPrint(
           '[FORUM_AUTH_CALLBACK] registration-complete-candidate '
@@ -458,6 +461,14 @@ class _ForumOAuthCompletionPageState extends State<ForumOAuthCompletionPage> {
     if (status != 200 || !currentUser || _finalizingWebViewSession) return;
     _finalizingWebViewSession = true;
     unawaited(_completeWebViewSession());
+  }
+
+  void _armCompletionTimeout() {
+    _timeoutTimer?.cancel();
+    _timeoutTimer = Timer(
+      HttpTimeout.oauthCompletion,
+      () => _fail('建立乐乎论坛登录会话超时，请返回后重新登录'),
+    );
   }
 
   Future<void> _completeWebViewSession() async {
