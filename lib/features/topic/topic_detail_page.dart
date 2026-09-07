@@ -13,6 +13,7 @@ import '../../data/models/topic.dart';
 import '../../data/models/topic_detail.dart';
 import '../../data/repositories/forum_repository.dart';
 import '../../data/services/discourse_api_client.dart';
+import '../../data/services/forum_draft_store.dart';
 import '../../data/services/html_text.dart';
 import '../../data/services/payload_factory.dart';
 import '../../features/profile/user_profile_page.dart';
@@ -33,6 +34,8 @@ class TopicDetailPage extends StatefulWidget {
     this.onSessionExpired,
     this.onBookmarkChanged,
     this.onOpenForumRoute,
+    this.initialReplyDraftId,
+    this.initialReplyToPostNumber,
   });
 
   final ForumRepository repository;
@@ -43,6 +46,8 @@ class TopicDetailPage extends StatefulWidget {
   final Future<void> Function()? onSessionExpired;
   final VoidCallback? onBookmarkChanged;
   final ValueChanged<String>? onOpenForumRoute;
+  final String? initialReplyDraftId;
+  final int? initialReplyToPostNumber;
 
   @override
   State<TopicDetailPage> createState() => _TopicDetailPageState();
@@ -155,6 +160,8 @@ class _TopicDetailPageState extends State<TopicDetailPage>
                       item: widget.topic,
                       detail: detail,
                       targetPostNumber: widget.targetPostNumber,
+                      initialReplyDraftId: widget.initialReplyDraftId,
+                      initialReplyToPostNumber: widget.initialReplyToPostNumber,
                       category: widget.repository.categoryById(
                         detail?.categoryId ?? widget.topic.categoryId,
                       ),
@@ -980,6 +987,35 @@ class _TopicDetailPageState extends State<TopicDetailPage>
         message.contains('没有权限') ||
         message.toLowerCase().contains('forbidden');
   }
+}
+
+Future<void> openTopicReplyDraft(
+  BuildContext context, {
+  required ForumRepository repository,
+  required ForumComposerDraft draft,
+}) {
+  final topicId = draft.topicId;
+  if (topicId == null) return Future<void>.value();
+  return Navigator.of(context).push<void>(
+    shuyoRoute(
+      builder: (context) => TopicDetailPage(
+        repository: repository,
+        topic: TopicListItem(
+          id: topicId,
+          title: draft.topicTitle.isEmpty ? '帖子 #$topicId' : draft.topicTitle,
+          postsCount: 0,
+          replyCount: 0,
+          highestPostNumber: draft.replyToPostNumber ?? 1,
+          views: 0,
+          likeCount: 0,
+          categoryId: draft.categoryId ?? 0,
+          posters: const [],
+        ),
+        initialReplyDraftId: draft.id,
+        initialReplyToPostNumber: draft.replyToPostNumber,
+      ),
+    ),
+  );
 }
 
 class _ReportSelection {

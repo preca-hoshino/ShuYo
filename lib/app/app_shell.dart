@@ -48,6 +48,7 @@ import '../features/messages/messages_page.dart';
 import '../features/messages/notifications_page.dart';
 import '../features/onboarding/startup_onboarding.dart';
 import '../features/profile/profile_page.dart';
+import '../features/profile/draft_box_page.dart';
 import '../features/profile/forum_activity_page.dart';
 import '../features/profile/profile_settings_page.dart';
 import '../features/profile/user_profile_page.dart';
@@ -861,6 +862,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
           onEditProfile: _openProfileSettings,
           activityCountsFuture: _profileActivityCountsFuture,
           onOpenActivity: (kind) => unawaited(_openProfileActivity(kind)),
+          onOpenDrafts: () => unawaited(_openDraftBox()),
         ),
       ],
     );
@@ -1881,6 +1883,13 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
       return;
     }
     _refreshProfileActivityCounts();
+  }
+
+  Future<void> _openDraftBox() async {
+    if (!_repo.hasLocalAccount) return;
+    await Navigator.of(context).push<void>(
+      shuyoRoute(builder: (context) => DraftBoxPage(repository: _repo)),
+    );
   }
 
   Future<void> _openClientSettings() async {

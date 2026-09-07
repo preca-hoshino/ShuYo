@@ -19,6 +19,7 @@ class ProfilePage extends StatelessWidget {
     required this.onEditProfile,
     required this.activityCountsFuture,
     required this.onOpenActivity,
+    this.onOpenDrafts,
   });
 
   final UserProfile profile;
@@ -30,6 +31,7 @@ class ProfilePage extends StatelessWidget {
   final VoidCallback onEditProfile;
   final Future<ForumActivityCounts>? activityCountsFuture;
   final ValueChanged<ForumActivityKind> onOpenActivity;
+  final VoidCallback? onOpenDrafts;
 
   @override
   Widget build(BuildContext context) {
@@ -69,6 +71,7 @@ class ProfilePage extends StatelessWidget {
             future: activityCountsFuture,
             fallbackHasValues: hasCachedSummary,
             onOpenActivity: isBusy || !isOnline ? null : onOpenActivity,
+            onOpenDrafts: isBusy ? null : onOpenDrafts,
           ),
           const SizedBox(height: 20),
           _StatList(summary: summary, showValues: hasCachedSummary),
@@ -84,12 +87,14 @@ class _ActivitySummaryBar extends StatelessWidget {
     required this.future,
     required this.fallbackHasValues,
     required this.onOpenActivity,
+    required this.onOpenDrafts,
   });
 
   final ForumActivityCounts fallback;
   final Future<ForumActivityCounts>? future;
   final bool fallbackHasValues;
   final ValueChanged<ForumActivityKind>? onOpenActivity;
+  final VoidCallback? onOpenDrafts;
 
   @override
   Widget build(BuildContext context) {
@@ -100,6 +105,7 @@ class _ActivitySummaryBar extends StatelessWidget {
         showTopicAndRead: fallbackHasValues,
         loadingBookmarks: true,
         onOpenActivity: onOpenActivity,
+        onOpenDrafts: onOpenDrafts,
       );
     }
     return FutureBuilder<ForumActivityCounts>(
@@ -110,6 +116,7 @@ class _ActivitySummaryBar extends StatelessWidget {
           showTopicAndRead: snapshot.hasData || fallbackHasValues,
           loadingBookmarks: !snapshot.hasData,
           onOpenActivity: onOpenActivity,
+          onOpenDrafts: onOpenDrafts,
         );
       },
     );
@@ -122,12 +129,14 @@ class _ActivitySummaryContent extends StatelessWidget {
     required this.showTopicAndRead,
     required this.loadingBookmarks,
     required this.onOpenActivity,
+    required this.onOpenDrafts,
   });
 
   final ForumActivityCounts counts;
   final bool showTopicAndRead;
   final bool loadingBookmarks;
   final ValueChanged<ForumActivityKind>? onOpenActivity;
+  final VoidCallback? onOpenDrafts;
 
   @override
   Widget build(BuildContext context) {
@@ -154,6 +163,33 @@ class _ActivitySummaryContent extends StatelessWidget {
             kind: ForumActivityKind.bookmarks,
             value: loadingBookmarks ? '-' : compactCount(counts.bookmarks),
             onTap: onOpenActivity,
+          ),
+          Expanded(
+            child: InkWell(
+              onTap: onOpenDrafts,
+              child: SizedBox(
+                height: 64,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      '草稿箱',
+                      style: ShuYoTextStyles.chip(
+                        color: colors.textTertiary,
+                        size: 12.5,
+                        weight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Icon(
+                      Icons.drafts_outlined,
+                      size: 21,
+                      color: colors.textPrimary,
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
         ],
       ),

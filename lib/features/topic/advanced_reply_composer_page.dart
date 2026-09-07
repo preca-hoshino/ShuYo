@@ -31,7 +31,7 @@ class AdvancedReplyComposerPage extends StatefulWidget {
     required this.initialRaw,
     required this.initialImages,
     required this.replyToPostNumber,
-    required this.draftKey,
+    required this.draftSession,
     required this.onUploadImage,
     required this.onSubmit,
   });
@@ -40,7 +40,7 @@ class AdvancedReplyComposerPage extends StatefulWidget {
   final String initialRaw;
   final List<UploadedImage> initialImages;
   final int? replyToPostNumber;
-  final String draftKey;
+  final ForumDraftSession draftSession;
   final Future<UploadedImage> Function(PickedImage image) onUploadImage;
   final Future<bool> Function(ReplyDraft draft) onSubmit;
 
@@ -53,10 +53,10 @@ class _AdvancedReplyComposerPageState extends State<AdvancedReplyComposerPage> {
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
   final _images = <UploadedImage>[];
-  Timer? _draftSaveTimer;
   bool _uploading = false;
   bool _submitting = false;
   bool _submitted = false;
+  bool _allowPop = false;
 
   bool get _canSend =>
       !_uploading &&
@@ -73,7 +73,6 @@ class _AdvancedReplyComposerPageState extends State<AdvancedReplyComposerPage> {
 
   @override
   void dispose() {
-    _draftSaveTimer?.cancel();
     if (!_submitted) {
       unawaited(_saveDraftNow());
     }
@@ -85,56 +84,62 @@ class _AdvancedReplyComposerPageState extends State<AdvancedReplyComposerPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        leading: IconButton(
-          tooltip: '返回',
-          onPressed: _close,
-          icon: const Icon(Icons.arrow_back),
+    return PopScope(
+      canPop: _allowPop,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) unawaited(_close());
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          leading: IconButton(
+            tooltip: '返回',
+            onPressed: _close,
+            icon: const Icon(Icons.arrow_back),
+          ),
+          title: const Text('进阶回复'),
+          actions: [
+            TextButton(
+              onPressed: _submitting ? null : _showPreview,
+              child: const Text('预览'),
+            ),
+            TextButton(
+              onPressed: _canSend ? _submit : null,
+              child: _submitting
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 3),
+                    )
+                  : const Text('发送'),
+            ),
+          ],
         ),
-        title: const Text('进阶回复'),
-        actions: [
-          TextButton(
-            onPressed: _submitting ? null : _showPreview,
-            child: const Text('预览'),
-          ),
-          TextButton(
-            onPressed: _canSend ? _submit : null,
-            child: _submitting
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 3),
-                  )
-                : const Text('发送'),
-          ),
-        ],
-      ),
-      body: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-          child: Column(
-            children: [
-              _ReplyTargetBanner(postNumber: widget.replyToPostNumber),
-              const SizedBox(height: 12),
-              Expanded(
-                child: AdvancedMarkdownEditor(
-                  controller: _controller,
-                  focusNode: _focusNode,
-                  enabled: !_submitting,
-                  uploading: _uploading,
-                  onUploadImage: _pickAndUpload,
-                  onPreview: _showPreview,
-                  onInsertPoll: _insertPoll,
-                  showPreviewInToolbar: false,
-                  hintText: widget.replyToPostNumber == null
-                      ? '写评论'
-                      : '回复 #${widget.replyToPostNumber}',
-                  expands: true,
+        body: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            child: Column(
+              children: [
+                _ReplyTargetBanner(postNumber: widget.replyToPostNumber),
+                const SizedBox(height: 12),
+                Expanded(
+                  child: AdvancedMarkdownEditor(
+                    controller: _controller,
+                    focusNode: _focusNode,
+                    enabled: !_submitting,
+                    uploading: _uploading,
+                    onUploadImage: _pickAndUpload,
+                    onPreview: _showPreview,
+                    onInsertPoll: _insertPoll,
+                    showPreviewInToolbar: false,
+                    hintText: widget.replyToPostNumber == null
+                        ? '写评论'
+                        : '回复 #${widget.replyToPostNumber}',
+                    expands: true,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -208,10 +213,11 @@ class _AdvancedReplyComposerPageState extends State<AdvancedReplyComposerPage> {
     }
     if (success) {
       _submitted = true;
-      await ForumDraftStore.remove(widget.draftKey);
+      await widget.draftSession.discard();
       if (!mounted) {
         return;
       }
+      setState(() => _allowPop = true);
       Navigator.of(context).pop(
         const AdvancedReplyComposerResult(
           raw: '',
@@ -262,8 +268,11 @@ class _AdvancedReplyComposerPageState extends State<AdvancedReplyComposerPage> {
     );
   }
 
-  void _close() {
-    unawaited(_saveDraftNow());
+  Future<void> _close() async {
+    if (_allowPop) return;
+    await _saveDraftNow();
+    if (!mounted) return;
+    setState(() => _allowPop = true);
     Navigator.of(context).pop(
       AdvancedReplyComposerResult(
         raw: _controller.text,
@@ -277,10 +286,13 @@ class _AdvancedReplyComposerPageState extends State<AdvancedReplyComposerPage> {
     if (_submitting || _submitted) {
       return;
     }
-    _draftSaveTimer?.cancel();
-    _draftSaveTimer = Timer(
-      const Duration(milliseconds: 500),
-      () => unawaited(_saveDraftNow()),
+    widget.draftSession.update(
+      widget.draftSession.draft.copyWith(
+        raw: _controller.text,
+        replyToPostNumber: widget.replyToPostNumber,
+        clearReplyToPostNumber: widget.replyToPostNumber == null,
+        images: _referencedImages(),
+      ),
     );
     if (mounted) {
       setState(() {});
@@ -291,14 +303,15 @@ class _AdvancedReplyComposerPageState extends State<AdvancedReplyComposerPage> {
     if (_submitted) {
       return;
     }
-    await ForumDraftStore.save(
-      widget.draftKey,
-      ForumComposerDraft(
+    widget.draftSession.update(
+      widget.draftSession.draft.copyWith(
         raw: _controller.text,
         replyToPostNumber: widget.replyToPostNumber,
+        clearReplyToPostNumber: widget.replyToPostNumber == null,
         images: _referencedImages(),
       ),
     );
+    await widget.draftSession.flush();
   }
 
   List<UploadedImage> _referencedImages() {

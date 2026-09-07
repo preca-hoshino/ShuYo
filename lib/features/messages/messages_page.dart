@@ -959,6 +959,37 @@ bool _isForumTransportError(Object error) {
       error is HttpException;
 }
 
+Future<void> openPrivateMessageReplyDraft(
+  BuildContext context, {
+  required ForumRepository repository,
+  required ForumComposerDraft draft,
+}) {
+  final topicId = draft.topicId;
+  if (topicId == null) return Future<void>.value();
+  return Navigator.of(context).push<void>(
+    shuyoRoute(
+      builder: (context) => _MessageDetailPage(
+        repository: repository,
+        topic: TopicListItem(
+          id: topicId,
+          title: draft.topicTitle.isEmpty ? '私信会话' : draft.topicTitle,
+          postsCount: 0,
+          replyCount: 0,
+          highestPostNumber: 1,
+          views: 0,
+          likeCount: 0,
+          categoryId: 0,
+          posters: const [],
+          archetype: 'private_message',
+        ),
+        counterpartTitle: draft.recipient.isEmpty ? '私信会话' : draft.recipient,
+        counterpartUsername: draft.recipient.isEmpty ? null : draft.recipient,
+        initialReplyDraftId: draft.id,
+      ),
+    ),
+  );
+}
+
 class _MessageDetailPage extends StatefulWidget {
   const _MessageDetailPage({
     required this.repository,
@@ -966,6 +997,7 @@ class _MessageDetailPage extends StatefulWidget {
     required this.topic,
     required this.counterpartTitle,
     this.counterpartUsername,
+    this.initialReplyDraftId,
   });
 
   final ForumRepository repository;
@@ -973,6 +1005,7 @@ class _MessageDetailPage extends StatefulWidget {
   final TopicListItem topic;
   final String counterpartTitle;
   final String? counterpartUsername;
+  final String? initialReplyDraftId;
 
   @override
   State<_MessageDetailPage> createState() => _MessageDetailPageState();
@@ -1027,6 +1060,9 @@ class _MessageDetailPageState extends State<_MessageDetailPage> {
               submitting: _submitting,
               repository: widget.repository,
               topicId: widget.topic.id,
+              topicTitle: widget.topic.title,
+              recipient: widget.counterpartUsername ?? widget.counterpartTitle,
+              initialDraftId: widget.initialReplyDraftId,
               onSubmit: _reply,
             ),
           ],
@@ -1691,12 +1727,18 @@ class _MessageReplyBar extends StatefulWidget {
     required this.submitting,
     required this.repository,
     required this.topicId,
+    required this.topicTitle,
+    required this.recipient,
+    this.initialDraftId,
     required this.onSubmit,
   });
 
   final bool submitting;
   final ForumRepository repository;
   final int topicId;
+  final String topicTitle;
+  final String recipient;
+  final String? initialDraftId;
   final Future<bool> Function(String raw, List<UploadedImage> images) onSubmit;
 
   @override
@@ -1711,20 +1753,13 @@ class _MessageReplyBarState extends State<_MessageReplyBar> {
   final _focusNode = FocusNode();
   final _images = <UploadedImage>[];
   Timer? _keyboardHandoffTimer;
-  Timer? _draftSaveTimer;
+  ForumDraftSession? _draftSession;
   double _lastKeyboardHeight = _fallbackKeyboardHeight;
   bool _uploading = false;
   bool _submitting = false;
   bool _showEmojiPanel = false;
   bool _switchingEmojiToKeyboard = false;
   bool _restoringDraft = false;
-
-  String get _draftKey {
-    return ForumDraftStore.privateMessageReplyKey(
-      username: widget.repository.profile.username,
-      topicId: widget.topicId,
-    );
-  }
 
   @override
   void initState() {
@@ -1739,8 +1774,8 @@ class _MessageReplyBarState extends State<_MessageReplyBar> {
   @override
   void dispose() {
     _keyboardHandoffTimer?.cancel();
-    _draftSaveTimer?.cancel();
     unawaited(_saveDraftNow());
+    _draftSession?.dispose();
     _focusNode.removeListener(_handleFocusChanged);
     _controller.removeListener(_handleDraftChanged);
     _controller.dispose();
@@ -2011,14 +2046,15 @@ class _MessageReplyBarState extends State<_MessageReplyBar> {
     }
     final images = List<UploadedImage>.of(_images);
     final raw = composeRawWithImages(text, images);
-    setState(() => _submitting = true);
     await _saveDraftNow();
+    if (!mounted) return;
+    setState(() => _submitting = true);
     final success = await widget.onSubmit(raw, images);
     if (!mounted) {
       return;
     }
     if (success) {
-      await ForumDraftStore.remove(_draftKey);
+      await _draftSession?.discard();
       if (!mounted) {
         return;
       }
@@ -2038,10 +2074,24 @@ class _MessageReplyBarState extends State<_MessageReplyBar> {
   }
 
   Future<void> _loadDraft() async {
-    final draft = await ForumDraftStore.load(_draftKey);
-    if (!mounted || draft == null) {
+    final username = widget.repository.profile.username;
+    final requestedId = widget.initialDraftId;
+    final draft = requestedId == null
+        ? await ForumDraftStore.latest(
+            username,
+            type: ForumDraftType.privateMessageReply,
+            topicId: widget.topicId,
+          )
+        : await ForumDraftStore.loadById(username, requestedId);
+    if (!mounted) {
       return;
     }
+    if (draft == null) {
+      _startDraft();
+      setState(() {});
+      return;
+    }
+    _startDraft(draft);
     _restoringDraft = true;
     _controller.text = draft.raw;
     setState(() {
@@ -2050,16 +2100,38 @@ class _MessageReplyBarState extends State<_MessageReplyBar> {
         ..addAll(draft.images);
     });
     _restoringDraft = false;
+    setState(() {});
+  }
+
+  void _startDraft([ForumComposerDraft? draft]) {
+    final username = widget.repository.profile.username;
+    _draftSession?.dispose();
+    _draftSession = ForumDraftSession(
+      draft ??
+          ForumComposerDraft(
+            id: ForumDraftStore.createId(),
+            type: ForumDraftType.privateMessageReply,
+            username: username,
+            topicId: widget.topicId,
+            topicTitle: widget.topicTitle,
+            recipient: widget.recipient,
+            createdAt: DateTime.now(),
+          ),
+    );
   }
 
   void _scheduleDraftSave() {
-    if (_restoringDraft || _submitting || widget.submitting) {
+    if (_draftSession == null ||
+        _restoringDraft ||
+        _submitting ||
+        widget.submitting) {
       return;
     }
-    _draftSaveTimer?.cancel();
-    _draftSaveTimer = Timer(
-      const Duration(milliseconds: 500),
-      () => unawaited(_saveDraftNow()),
+    _draftSession?.update(
+      _draftSession!.draft.copyWith(
+        raw: _controller.text,
+        images: List<UploadedImage>.of(_images),
+      ),
     );
   }
 
@@ -2067,13 +2139,8 @@ class _MessageReplyBarState extends State<_MessageReplyBar> {
     if (_restoringDraft || _submitting || widget.submitting) {
       return;
     }
-    await ForumDraftStore.save(
-      _draftKey,
-      ForumComposerDraft(
-        raw: _controller.text,
-        images: List<UploadedImage>.of(_images),
-      ),
-    );
+    _scheduleDraftSave();
+    await _draftSession?.flush();
   }
 }
 
