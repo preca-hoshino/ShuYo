@@ -277,7 +277,7 @@ class _NativeLoginPageState extends State<NativeLoginPage> {
     } on AcademicNativeAuthException catch (error) {
       _showError(error.message);
     } on Object {
-      _showError('无法连接学校认证服务，请使用校园网访问');
+      _showError('无法连接学校认证服务，请稍后再试');
     } finally {
       if (mounted) setState(() => _busy = false);
     }

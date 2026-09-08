@@ -392,10 +392,6 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
         bottomNavigationBar: BottomNavigationBar(
           currentIndex: _tabIndex,
           onTap: (index) {
-            if ((index == 1 || index == 2) && !_repo.hasLocalAccount) {
-              if (_tabIndex != 0) setState(() => _tabIndex = 0);
-              return;
-            }
             final shouldRefreshMessages = index == 2 &&
                 _repo.isOnline &&
                 (index == _tabIndex || _messageBadgeCount > 0);
@@ -861,15 +857,19 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
       forumContent = const _LoadingState();
       messagesContent = const _LoadingState();
     } else {
-      forumContent = const EmptyState(
-        icon: Icons.forum,
-        title: '暂未登录乐乎论坛',
-        message: '登录后可浏览和参与论坛讨论',
+      forumContent = _loggedOutForumTab(
+        const EmptyState(
+          icon: Icons.forum,
+          title: '暂未登录乐乎论坛',
+          message: '登录后可浏览和参与论坛讨论',
+        ),
       );
-      messagesContent = const EmptyState(
-        icon: Icons.chat_bubble,
-        title: '暂未登录乐乎论坛',
-        message: '登录后可查看论坛消息',
+      messagesContent = _loggedOutForumTab(
+        const EmptyState(
+          icon: Icons.chat_bubble,
+          title: '暂未登录乐乎论坛',
+          message: '登录后可查看论坛消息',
+        ),
       );
     }
     return IndexedStack(
@@ -891,6 +891,16 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
           onOpenDrafts: () => unawaited(_openDraftBox()),
         ),
       ],
+    );
+  }
+
+  Widget _loggedOutForumTab(Widget child) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        if (mounted && _tabIndex != 0) setState(() => _tabIndex = 0);
+      },
+      child: child,
     );
   }
 

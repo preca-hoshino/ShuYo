@@ -259,12 +259,12 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('使用WebVPN连接'), findsOneWidget);
-    expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
     await tester.ensureVisible(find.text('使用WebVPN连接'));
     await tester.tap(find.text('使用WebVPN连接'));
     await tester.pumpAndSettle();
     expect(find.text('当前WebVPN服务可用'), findsOneWidget);
     expect(find.textContaining('最近检查：'), findsOneWidget);
+    expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
 
     await tester.ensureVisible(find.byType(Switch));
     await tester.tap(find.byType(Switch));

@@ -818,28 +818,10 @@ class _StartupOnboardingState extends State<StartupOnboarding>
       child: Column(
         children: [
           ListTile(
-            contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-            leading: const Icon(Icons.vpn_lock_outlined),
+            contentPadding: const EdgeInsets.only(left: 56, right: 4),
             title: const Text('使用WebVPN连接'),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (_changingWebVpn)
-                  const Padding(
-                    padding: EdgeInsets.only(right: 10),
-                    child: SizedBox.square(
-                      dimension: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2.5),
-                    ),
-                  ),
-                Switch(
-                  value: _webVpnEnabled,
-                  onChanged: _changingWebVpn ? null : _changeWebVpn,
-                ),
-                Icon(
-                  _webVpnExpanded ? Icons.expand_less : Icons.expand_more,
-                ),
-              ],
+            trailing: Icon(
+              _webVpnExpanded ? Icons.expand_less : Icons.expand_more,
             ),
             onTap: () => setState(() => _webVpnExpanded = !_webVpnExpanded),
           ),
@@ -854,14 +836,34 @@ class _StartupOnboardingState extends State<StartupOnboarding>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    '若使用WebVPN代理，你需要完成上海大学统一认证，完成后可通过校外网络直接访问校内服务，但需注意该服务可能不稳定。',
-                    style: TextStyle(
-                      color: colors.onSurfaceVariant,
-                      height: 1.45,
-                    ),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '若使用WebVPN代理，你需要完成上海大学统一认证，完成后可通过校外网络直接访问校内服务，但需注意该服务可能不稳定。',
+                          style: TextStyle(
+                            color: colors.onSurfaceVariant,
+                            height: 1.45,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      if (_changingWebVpn)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 12, right: 4),
+                          child: SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2.5),
+                          ),
+                        ),
+                      Switch(
+                        value: _webVpnEnabled,
+                        onChanged: _changingWebVpn ? null : _changeWebVpn,
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 12),
                   Row(
                     children: [
                       Container(
