@@ -2308,25 +2308,22 @@ List<ForumCategory> _sortedCategories(Map<int, ForumCategory> categories) {
 class ForumRepositoryFactory {
   const ForumRepositoryFactory._();
 
-  static const _startupOnlineTimeout = HttpTimeout.connect;
   static const _requiredOnlineTimeout = HttpTimeout.normal;
 
-  static Future<ForumRepository> load() async {
+  /// Builds the forum state entirely from bundled fixtures and local caches.
+  /// Startup must never wait for BBS or WebVPN network availability.
+  static Future<ForumRepository> loadLocal() async {
     await _configureForumAccessMode();
     final fixture = await FixtureForumRepository.load();
-    final offline =
-        await OnlineForumRepository.restoreOffline(fallback: fixture);
-    if (offline != null) {
-      return offline;
-    }
-    try {
-      return await OnlineForumRepository.connect(
-        fallback: fixture,
-      ).timeout(_startupOnlineTimeout);
-    } on Object {
-      return fixture;
-    }
+    final offline = await OnlineForumRepository.restoreOffline(
+      fallback: fixture,
+      authService: _LocalForumAuthService(),
+    );
+    return offline ?? fixture;
   }
+
+  @Deprecated('Use loadLocal for local state or loadOnline for a connection')
+  static Future<ForumRepository> load() => loadLocal();
 
   static Future<ForumRepository> loadOnline() async {
     await _configureForumAccessMode();
@@ -2352,4 +2349,12 @@ class ForumRepositoryFactory {
       useWebVpn: settings.webVpnEnabled,
     );
   }
+}
+
+class _LocalForumAuthService extends ForumAuthService {
+  _LocalForumAuthService()
+      : super(
+          cookieLoader: (_) async => const [],
+          cookieSetter: (_) async {},
+        );
 }

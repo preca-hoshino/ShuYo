@@ -35,7 +35,6 @@ import '../data/services/discourse_api_client.dart';
 import '../data/services/forum_image_headers.dart';
 import '../data/services/forum_image_cache.dart';
 import '../data/services/forum_account_snapshot.dart';
-import '../data/services/forum_reachability_service.dart';
 import '../data/services/forum_auth_service.dart';
 import '../data/services/http_timeout.dart';
 import '../features/auth/native_login_page.dart';
@@ -125,6 +124,10 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   static const _minimumForumRefreshDuration = Duration(milliseconds: 420);
   static const _exitBackPressInterval = Duration(seconds: 2);
   static const _webVpnStatusRefreshInterval = Duration(minutes: 5);
+  static const _automaticForumRecoveryCooldown = Duration(seconds: 45);
+  static const _directForumRecoveryTimeout = Duration(seconds: 10);
+  static const _webVpnForumRecoveryTimeout = Duration(seconds: 15);
+  static const _userForumRecoveryTimeout = Duration(seconds: 25);
 
   int _tabIndex = 0;
   TopicFeedQuery _feedQuery = const TopicFeedQuery();
@@ -143,7 +146,6 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   late final AcademicScheduleWidgetService _scheduleWidgetService;
   late final ClientSettingsService _clientSettingsService;
   late final ClientBackendRepository _clientBackendRepository;
-  late final ForumReachabilityService _forumReachabilityService;
   late final AnnouncementRepository _announcementRepository;
   late final ClassroomRepository _classroomRepository;
   late final CourseRatingRepository _courseRatingRepository;
@@ -156,10 +158,8 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   bool _syncingAcademicSchedule = false;
   bool _loadingAnnouncementSummary = false;
   bool _refreshingForumBadges = false;
-  bool _checkingForumReachability = false;
   bool _checkingClientBackendPrompts = false;
   bool _refreshingWebVpnStatus = false;
-  bool _forumNetworkUnavailable = false;
   bool _webVpnReloginRequired = false;
   late bool _webVpnEnabled;
   late bool _hasAcademicSession;
@@ -174,7 +174,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   bool _messageRefreshing = false;
   Set<String> _seenNotificationKeys = const {};
   bool _notificationSeenKeysInitialized = false;
-  DateTime? _lastForumReachabilityCheck;
+  DateTime? _lastAutomaticForumRecoveryFailure;
   DateTime? _lastWebVpnStatusFetchAttempt;
   DateTime? _lastExitBackAt;
   String _scheduleSummaryText = '正在读取课表...';
@@ -216,7 +216,6 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     );
     _clientSettingsService = ClientSettingsService();
     _clientBackendRepository = ClientBackendRepository();
-    _forumReachabilityService = const ForumReachabilityService();
     _announcementRepository = widget.isDemo && demoData != null
         ? DemoAnnouncementRepository(
             items: demoData.announcements,
@@ -258,12 +257,6 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     unawaited(_loadAnnouncementSummaryFromCache());
     if (!widget.isDemo) {
       unawaited(_loadNetworkSettings());
-      unawaited(_refreshForumReachabilityQuietly(force: true));
-      if (_repo.hasLocalAccount && !_repo.isOnline) {
-        _isInitialForumConnectionCheck = true;
-        unawaited(_recoverForumConnection());
-      }
-      unawaited(_refreshAnnouncementSummaryQuietly());
       _scheduleSummaryTimer = Timer.periodic(
         const Duration(minutes: 1),
         (_) => _refreshScheduleSummaryQuietly(),
@@ -275,9 +268,22 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
       _startForumBadgeRefreshTimer(_forumBadgeRefreshInterval);
       unawaited(_scheduleNotificationService.syncScheduleReminders());
       WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (_repo.hasLocalAccount && !_repo.isOnline) {
+          _isInitialForumConnectionCheck = true;
+          unawaited(_restoreForumAfterFirstFrame());
+        }
+        unawaited(_refreshAnnouncementSummaryQuietly());
         unawaited(_checkClientBackendPrompts());
       });
     }
+  }
+
+  Future<void> _restoreForumAfterFirstFrame() async {
+    final recovery = await _recoverForumAutomatically();
+    if (!mounted || !recovery.isRestored) return;
+    await _initializeForumBadges();
+    unawaited(_recordForumDailyActivity());
   }
 
   @override
@@ -416,7 +422,6 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
             }
             if (index == 0) {
               unawaited(_refreshScheduleSummaryQuietly());
-              unawaited(_refreshForumReachabilityQuietly());
               unawaited(_refreshAnnouncementSummaryQuietly());
             }
           },
@@ -561,7 +566,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     }
     ForumRecoveryResult? recovery;
     if (_repo.hasLocalAccount && !_repo.isOnline) {
-      recovery = await _recoverForumConnection();
+      recovery = await _recoverForumAutomatically();
     }
     await _refreshForumBadgesQuietly(
       refreshSession: recovery?.isRestored != true,
@@ -855,7 +860,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
       messagesContent = MessagesPage(
         controller: _messagesPageController,
         repository: _repo,
-        onRecoverConnection: _recoverForumConnection,
+        onRecoverConnection: _recoverForumForUser,
         refreshSignal: _messageRefreshSignal,
         showArchived: _showArchivedMessages,
         onArchiveViewChanged: _setMessageArchiveView,
@@ -1024,49 +1029,8 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
         _webVpnEnabled = settings.webVpnEnabled;
       });
       _syncOnboardingAccountStatus();
-      if (settings.webVpnEnabled && !_repo.isOnline) {
-        unawaited(_recoverForumConnection());
-      }
     } on Object {
       // 网络设置读取失败时保留当前访问模式，不阻断首页加载。
-    }
-  }
-
-  Future<void> _refreshForumReachabilityQuietly({bool force = false}) async {
-    if (widget.isDemo) {
-      return;
-    }
-    if (_checkingForumReachability) {
-      return;
-    }
-    final lastCheck = _lastForumReachabilityCheck;
-    if (!force &&
-        lastCheck != null &&
-        DateTime.now().difference(lastCheck) < const Duration(minutes: 5)) {
-      return;
-    }
-    _checkingForumReachability = true;
-    _lastForumReachabilityCheck = DateTime.now();
-    try {
-      final result =
-          await _forumReachabilityService.checkDirectBbsReachability();
-      if (result.isUnavailable &&
-          ForumUrlResolver.mode == ForumAccessMode.direct) {
-        _repo.markConnectionUnavailable();
-      }
-      if (!mounted ||
-          (_forumNetworkUnavailable == result.isUnavailable &&
-              _repo.isOnline == !result.isUnavailable)) {
-        return;
-      }
-      setState(() {
-        _forumNetworkUnavailable = result.isUnavailable;
-      });
-      _syncOnboardingAccountStatus();
-    } on Object {
-      // 未知检测错误不展示内网不可达提示，避免把证书等非网络问题误报。
-    } finally {
-      _checkingForumReachability = false;
     }
   }
 
@@ -1118,7 +1082,10 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
       await _reloadForumRepositoryAfterAccessModeChange();
       if (!mounted) return false;
       if (enabled && _repo.hasLocalAccount && !_repo.isOnline) {
-        final recovery = await _recoverForumConnection(forceValidation: true);
+        final recovery = await _recoverForumConnection(
+          forceValidation: true,
+          userInitiated: true,
+        );
         if (mounted && recovery.isRestored) {
           _showSnack('WebVPN已登录，论坛连接已恢复');
         }
@@ -1457,6 +1424,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
 
   Future<ForumRecoveryResult> _recoverForumConnection({
     bool forceValidation = false,
+    bool userInitiated = false,
   }) {
     if (widget.isDemo) {
       return Future.value(
@@ -1472,6 +1440,14 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     final operation = _performForumConnectionRecovery(
       forceValidation: forceValidation,
       generation: generation,
+      allowWebViewPreparation: userInitiated,
+    ).timeout(
+      userInitiated
+          ? _userForumRecoveryTimeout
+          : ForumUrlResolver.usesWebVpn
+              ? _webVpnForumRecoveryTimeout
+              : _directForumRecoveryTimeout,
+      onTimeout: () => _handleForumRecoveryTimeout(generation),
     );
     late final Future<ForumRecoveryResult> shared;
     shared = operation.whenComplete(() {
@@ -1483,9 +1459,57 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     return shared;
   }
 
+  Future<ForumRecoveryResult> _recoverForumAutomatically() async {
+    final lastFailure = _lastAutomaticForumRecoveryFailure;
+    if (lastFailure != null &&
+        DateTime.now().difference(lastFailure) <
+            _automaticForumRecoveryCooldown) {
+      return ForumRecoveryResult(
+        status: ForumRecoveryStatus.unavailable,
+        repository: _repo,
+      );
+    }
+    final result = await _recoverForumConnection();
+    _lastAutomaticForumRecoveryFailure =
+        result.isRestored ? null : DateTime.now();
+    return result;
+  }
+
+  Future<ForumRecoveryResult> _recoverForumForUser() {
+    return _recoverForumConnection(userInitiated: true);
+  }
+
+  Future<ForumRecoveryResult> _handleForumRecoveryTimeout(
+    int generation,
+  ) async {
+    if (generation == _forumRecoveryGeneration) {
+      _forumRecoveryGeneration++;
+      final completer = _forumWebVpnPreloadCompleter;
+      if (completer != null && !completer.isCompleted) {
+        completer.complete(ForumWebVpnPreparationResult.unavailable);
+      }
+      _forumWebVpnPreloadCompleter = null;
+      _repo.markConnectionUnavailable();
+      if (mounted) {
+        setState(() {
+          _reloadingSession = false;
+          _checkingForumConnection = false;
+          _isInitialForumConnectionCheck = false;
+        });
+        _syncOnboardingAccountStatus();
+      }
+    }
+    return ForumRecoveryResult(
+      status: ForumRecoveryStatus.unavailable,
+      repository: _repo,
+      error: const ForumConnectionUnavailableException('论坛连接超时，请稍后重试'),
+    );
+  }
+
   Future<ForumRecoveryResult> _performForumConnectionRecovery({
     required bool forceValidation,
     required int generation,
+    required bool allowWebViewPreparation,
   }) async {
     if (!mounted) {
       return ForumRecoveryResult(
@@ -1541,6 +1565,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
 
       final nextRepository = await _connectForumRepositoryWithFallback(
         generation,
+        allowWebViewPreparation: allowWebViewPreparation,
       );
       _ensureForumRecoveryCurrent(generation);
       if (mounted) {
@@ -1609,8 +1634,9 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   }
 
   Future<ForumRepository> _connectForumRepositoryWithFallback(
-    int generation,
-  ) async {
+    int generation, {
+    required bool allowWebViewPreparation,
+  }) async {
     try {
       final repository = await widget.reloadRepository();
       _ensureForumRecoveryCurrent(generation);
@@ -1619,7 +1645,9 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
       rethrow;
     } on Object catch (firstError) {
       _ensureForumRecoveryCurrent(generation);
-      if (!ForumUrlResolver.usesWebVpn || !_isForumTransportError(firstError)) {
+      if (!allowWebViewPreparation ||
+          !ForumUrlResolver.usesWebVpn ||
+          !_isForumTransportError(firstError)) {
         rethrow;
       }
       final prepared = await _prepareForumWebVpnSessionInBackground();
@@ -1689,7 +1717,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     final queryKey = _feedQuery.key;
     try {
       if (!_repo.isOnline) {
-        final recovery = await _recoverForumConnection();
+        final recovery = await _recoverForumForUser();
         if (!mounted) {
           return;
         }
@@ -1797,7 +1825,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
         builder: (context) => TopicDetailPage(
           repository: _repo,
           topic: topic,
-          onRecoverConnection: _recoverForumConnection,
+          onRecoverConnection: _recoverForumForUser,
           onLoginRequired: _login,
           onSessionExpired: _clearExpiredLogin,
           onOpenForumRoute: _openForumRoute,
@@ -1853,7 +1881,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
       shuyoRoute(
         builder: (context) => ForumSearchPage(
           repository: _repo,
-          onRecoverConnection: _recoverForumConnection,
+          onRecoverConnection: _recoverForumForUser,
           onLoginRequired: _login,
           onBookmarkChanged: _refreshProfileActivityCounts,
           onSessionExpired: _clearExpiredLogin,
@@ -1878,7 +1906,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
         builder: (context) => UserProfilePage(
           repository: _repo,
           username: username,
-          onRecoverConnection: _recoverForumConnection,
+          onRecoverConnection: _recoverForumForUser,
         ),
       ),
     );
@@ -1919,7 +1947,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
         builder: (context) => ForumActivityPage(
           repository: _repo,
           kind: kind,
-          onRecoverConnection: _recoverForumConnection,
+          onRecoverConnection: _recoverForumForUser,
           onLoginRequired: _login,
           onSessionExpired: _clearExpiredLogin,
           onBookmarkChanged: _refreshProfileActivityCounts,
@@ -2028,7 +2056,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
       shuyoRoute(
         builder: (context) => NotificationsPage(
           repository: _repo,
-          onRecoverConnection: _recoverForumConnection,
+          onRecoverConnection: _recoverForumForUser,
           onLoginRequired: _login,
           onSessionExpired: _clearExpiredLogin,
           onBookmarkChanged: _refreshProfileActivityCounts,
@@ -2117,7 +2145,10 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     if (_reloadingSession) {
       return;
     }
-    final recovery = await _recoverForumConnection(forceValidation: true);
+    final recovery = await _recoverForumConnection(
+      forceValidation: true,
+      userInitiated: true,
+    );
     if (!mounted) {
       return;
     }
@@ -2153,7 +2184,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     try {
       await _repo.clearLocalAccount();
       await _repo.clearLoginCookies();
-      final nextRepository = await ForumRepositoryFactory.load();
+      final nextRepository = await ForumRepositoryFactory.loadLocal();
       if (!mounted) {
         return false;
       }
@@ -2251,7 +2282,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     } on Object {
       // Cookie 清理失败不应阻断 UI 回到可用状态。
     }
-    final nextRepository = await ForumRepositoryFactory.load();
+    final nextRepository = await ForumRepositoryFactory.loadLocal();
     nextRepository.markAuthenticationRequired();
     if (!mounted) {
       return;
@@ -2515,7 +2546,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   }
 
   Future<ForumRepository> _loadForumRepositoryForAccessModeChange() {
-    return ForumRepositoryFactory.load().timeout(
+    return ForumRepositoryFactory.loadLocal().timeout(
       _forumAccessModeReloadTimeout,
       onTimeout: () => FixtureForumRepository.load(),
     );

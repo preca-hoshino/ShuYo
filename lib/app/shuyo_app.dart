@@ -192,7 +192,7 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
     ClassroomUrlResolver.configure(
       useWebVpn: networkSettings.webVpnEnabled,
     );
-    final repository = await ForumRepositoryFactory.load();
+    final repository = await ForumRepositoryFactory.loadLocal();
     final academicAccountStore = AcademicAccountStore();
     final academicStudentId = await academicAccountStore.loadStudentId();
     final academicSessionExpired = academicStudentId != null &&
