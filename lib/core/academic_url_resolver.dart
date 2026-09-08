@@ -1,5 +1,4 @@
 import 'academic_constants.dart';
-import 'forum_url_resolver.dart';
 
 class AcademicUrlResolver {
   const AcademicUrlResolver._();
@@ -8,10 +7,12 @@ class AcademicUrlResolver {
   static const webVpnBaseUrl = 'https://$webVpnHost';
   static const homePath = '/jwglxt/xtgl/index_initMenu.html';
 
-  static bool get usesWebVpn => ForumUrlResolver.usesWebVpn;
+  // The academic system is publicly reachable. WebVPN is deliberately kept
+  // out of the academic route so forum/classroom transport changes cannot
+  // invalidate the timetable session.
+  static bool get usesWebVpn => false;
 
-  static String get baseUrl =>
-      usesWebVpn ? webVpnBaseUrl : AcademicConstants.baseUrl;
+  static String get baseUrl => AcademicConstants.baseUrl;
 
   static Uri get baseUri => Uri.parse(baseUrl);
 
@@ -28,7 +29,7 @@ class AcademicUrlResolver {
 
   static bool isTicketLoginUrl(String value) {
     final uri = Uri.tryParse(value);
-    final expectedHost = usesWebVpn ? webVpnHost : AcademicConstants.host;
+    const expectedHost = AcademicConstants.host;
     return uri != null &&
         uri.host == expectedHost &&
         uri.path.endsWith('/jwglxt/ticketlogin');
@@ -36,7 +37,7 @@ class AcademicUrlResolver {
 
   static bool isPreparedWebVpnAcademicUrl(String value) {
     final uri = Uri.tryParse(value);
-    final expectedHost = usesWebVpn ? webVpnHost : AcademicConstants.host;
+    const expectedHost = AcademicConstants.host;
     if (uri == null || uri.host != expectedHost) {
       return false;
     }

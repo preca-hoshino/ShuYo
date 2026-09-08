@@ -11,10 +11,11 @@ import '../../core/client_user_agent.dart';
 import '../../core/forum_url_resolver.dart';
 import 'academic_auth_service.dart';
 import 'http_timeout.dart';
+import 'webvpn_session_store.dart';
 
 enum AcademicVerificationMethod { wecom, sms }
 
-enum _NativeAuthTarget { academic, forum }
+enum _NativeAuthTarget { academic, forum, webVpn }
 
 class AcademicLoginChallenge {
   const AcademicLoginChallenge({required this.methods});
@@ -75,6 +76,15 @@ class AcademicNativeAuthService {
     _client.connectionTimeout = HttpTimeout.connect;
   }
 
+  AcademicNativeAuthService.forWebVpn({
+    HttpClient? httpClient,
+    WebViewCookieManager? cookieManager,
+  })  : _target = _NativeAuthTarget.webVpn,
+        _cookieManager = cookieManager ?? WebViewCookieManager(),
+        _client = httpClient ?? HttpClient() {
+    _client.connectionTimeout = HttpTimeout.connect;
+  }
+
   static const _newssoPathMarker = '/oauth2/login/';
   static Uri get _academicEntry => AcademicUrlResolver.entryUri;
   static const _webVpnPortal = 'https://webvpn.shu.edu.cn';
@@ -98,10 +108,9 @@ class AcademicNativeAuthService {
     final manager = WebViewCookieManager();
     if (_target == _NativeAuthTarget.academic) {
       await AcademicAuthService().clearCachedCookiesForReauthentication();
-      if (AcademicUrlResolver.usesWebVpn &&
-          defaultTargetPlatform == TargetPlatform.android) {
-        await _resetWebVpnCookieStore(manager);
-      }
+    } else if (_target == _NativeAuthTarget.webVpn) {
+      await WebVpnSessionStore().clearCachedCookiesForReauthentication();
+      await _clearWebVpnAuthCookies(manager);
     }
     final domains = <String>{};
     final expectedByDomain = <String, Map<String, String>>{};
@@ -185,80 +194,33 @@ class AcademicNativeAuthService {
     }
   }
 
-  Future<void> _resetWebVpnCookieStore(WebViewCookieManager manager) async {
-    // Android may retain multiple same-name tokens across host/path scopes;
-    // setting an empty value for one URL does not reliably remove all of them.
-    // Preserve only forum-owned cookies, clear the platform store atomically,
-    // then restore the forum session before installing the fresh OAuth cookie.
-    // Academic and SSO cookies belong to the session being replaced, including
-    // JSESSIONID and route, so restoring them can resurrect an expired login.
+  Future<void> _clearWebVpnAuthCookies(WebViewCookieManager manager) async {
     final domains = <Uri>[
-      Uri.parse('https://webvpn.shu.edu.cn'),
-      ForumUrlResolver.baseUri,
-      Uri.parse(AcademicUrlResolver.webVpnBaseUrl),
-      Uri.parse('https://http-jwxt-shu-edu-cn-80.webvpn.shu.edu.cn'),
-      Uri.parse('https://https-newsso-shu-edu-cn-443.webvpn.shu.edu.cn'),
+      Uri.parse(_webVpnPortal),
       Uri.parse('https://oauth.shu.edu.cn'),
+      Uri.parse('https://https-oauth-shu-edu-cn-443.webvpn.shu.edu.cn'),
+      Uri.parse('https://https-newsso-shu-edu-cn-443.webvpn.shu.edu.cn'),
     ];
-    final preserved = <String, WebViewCookie>{};
     for (final domain in domains) {
       try {
         final cookies = await manager.getCookies(domain: domain);
         for (final cookie in cookies) {
-          if (!shouldPreserveCookieDuringAcademicReauthentication(
-            sourceUri: domain,
-            cookie: cookie,
-          )) {
+          if (cookie.name != 'webvpn-token' && cookie.name != 'SHU_OAUTH2') {
             continue;
           }
-          final normalized = WebViewCookie(
-            name: cookie.name,
-            value: cookie.value,
-            domain: _normalizeCookieDomain(cookie.domain, domain.host),
-            path: cookie.path.isEmpty ? '/' : cookie.path,
+          await manager.setCookie(
+            WebViewCookie(
+              name: cookie.name,
+              value: '',
+              domain: _normalizeCookieDomain(cookie.domain, domain.host),
+              path: cookie.path.isEmpty ? '/' : cookie.path,
+            ),
           );
-          final key =
-              '${normalized.name}\u0000${normalized.domain}\u0000${normalized.path}';
-          preserved[key] = normalized;
         }
       } on Object {
-        // Continue with the remaining cookie domains.
+        // Fresh cookies collected by the native flow are installed below.
       }
     }
-    if (kDebugMode) {
-      final names = preserved.values
-          .map((cookie) => cookie.name)
-          .toSet()
-          .toList()
-        ..sort();
-      debugPrint(
-        '[SHU_AUTH] reset academic webview cookies '
-        'preservedForumNames=$names',
-      );
-    }
-    try {
-      await manager.clearCookies();
-    } on Object {
-      // A best-effort reset; the callback can still proceed with fresh cookies.
-    }
-    for (final cookie in preserved.values) {
-      try {
-        await manager.setCookie(cookie);
-      } on Object {
-        // Continue restoring the remaining ordinary cookies.
-      }
-    }
-  }
-
-  @visibleForTesting
-  static bool shouldPreserveCookieDuringAcademicReauthentication({
-    required Uri sourceUri,
-    required WebViewCookie cookie,
-  }) {
-    if (!ForumUrlResolver.isKnownForumHost(sourceUri.host.toLowerCase())) {
-      return false;
-    }
-    return cookie.name != 'webvpn-token' && cookie.name != 'SHU_OAUTH2';
   }
 
   Future<AcademicLoginResult> login({
@@ -391,6 +353,9 @@ class AcademicNativeAuthService {
   }
 
   Future<Uri> _discoverLoginUri() async {
+    if (_target == _NativeAuthTarget.webVpn) {
+      return _startWebVpnOAuth();
+    }
     if (_target == _NativeAuthTarget.forum) {
       await _importWebViewCookies();
     }
@@ -411,10 +376,6 @@ class AcademicNativeAuthService {
       await response.drain<void>().timeout(HttpTimeout.normal);
       if (next == null) {
         if (uri.path.contains(_newssoPathMarker)) return uri;
-        if (_target == _NativeAuthTarget.academic && uri.host == _webVpnHost) {
-          uri = await _startWebVpnOAuth();
-          continue;
-        }
         if (_target == _NativeAuthTarget.forum &&
             ForumUrlResolver.usesWebVpn &&
             uri.host == _webVpnHost) {
@@ -682,7 +643,7 @@ class AcademicNativeAuthService {
       }
       throw const AcademicNativeAuthException(
         'timeout',
-        '连接学校认证服务超时，请稍后重试',
+        '连接学校认证服务超时，请使用校园网访问',
       );
     } on AcademicNativeAuthException catch (error, stackTrace) {
       if (kDebugMode) {

@@ -1023,7 +1023,7 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
       _showSnack('$prefix，已安排 $reminderCount 条课程提醒');
       return;
     }
-    _showSnack('$prefix，未安排课程提醒，请检查通知/精确提醒权限或当前周设置');
+    _showSnack('$prefix，未安排课程提醒');
   }
 
   Future<void> _showErrorDialog({

@@ -57,20 +57,12 @@ class AcademicAuthService {
       _directSessionValidator;
 
   Future<Set<String>> clearCookies() async {
-    // These shared authentication cookies may only exist in the persisted
-    // native cache after a partial WebView restore, so remove them from the
-    // forum store even when the live cookie query returns nothing.
-    final clearedSharedNames = <String>{'webvpn-token', 'SHU_OAUTH2'};
+    // Academic logout only owns the direct jwxt session. WebVPN and forum
+    // sessions are independent and must survive this operation.
+    final clearedSharedNames = <String>{};
     final domains = <(Uri, bool)>[
-      (Uri.parse(ForumUrlResolver.webVpnPortalUrl), true),
       (Uri.parse(AcademicConstants.baseUrl), false),
-      (Uri.parse(AcademicUrlResolver.webVpnBaseUrl), false),
-      (Uri.parse('https://oauth.shu.edu.cn'), true),
-      (Uri.parse('https://https-oauth-shu-edu-cn-443.webvpn.shu.edu.cn'), true),
-      (
-        Uri.parse('https://https-newsso-shu-edu-cn-443.webvpn.shu.edu.cn'),
-        true
-      ),
+      (Uri.parse('${AcademicConstants.baseUrl}/jwglxt/'), false),
     ];
     final prefs = await _preferencesLoader();
     // Record the user's intent before touching the WebView. Cookie deletion
@@ -103,7 +95,6 @@ class AcademicAuthService {
     }
     await Future.wait([
       prefs.remove(_cachedDirectCookiesKey),
-      prefs.remove(_cachedWebVpnCookiesKey),
       prefs.setBool(_explicitlySignedOutKey, true),
     ]);
     return clearedSharedNames;
@@ -116,7 +107,6 @@ class AcademicAuthService {
     final prefs = await _preferencesLoader();
     await Future.wait([
       prefs.remove(_cachedDirectCookiesKey),
-      prefs.remove(_cachedWebVpnCookiesKey),
     ]);
     _debug('cleared cached cookies for reauthentication');
   }
@@ -148,7 +138,7 @@ class AcademicAuthService {
     final status = AcademicUrlResolver.usesWebVpn
         ? await validateWebVpnSession()
         : await validateDirectAcademicSession();
-    return status != WebVpnSessionStatus.loginRequired;
+    return status == WebVpnSessionStatus.valid;
   }
 
   Future<WebVpnSessionStatus> validateDirectAcademicSession() async {
@@ -254,10 +244,6 @@ class AcademicAuthService {
   }
 
   Future<WebVpnSessionStatus> validateWebVpnSession() async {
-    if (await _isExplicitlySignedOut()) {
-      _debug('session validation skipped: explicitly signed out');
-      return WebVpnSessionStatus.loginRequired;
-    }
     final cached = await _loadCachedCookies(webVpn: true);
     final live = await _loadLiveCookies(webVpn: true);
     final merged = _mergeCookieGroups(cached, live);
@@ -453,7 +439,12 @@ class AcademicAuthService {
             Uri.parse(AcademicConstants.baseUrl),
             Uri.parse('${AcademicConstants.baseUrl}/jwglxt/'),
           ]
-        : <Uri>[Uri.parse(AcademicConstants.baseUrl)];
+        : <Uri>[
+            Uri.parse(AcademicConstants.baseUrl),
+            Uri.parse('${AcademicConstants.baseUrl}/jwglxt/'),
+            AcademicUrlResolver.homeUri,
+            AcademicUrlResolver.scheduleIndexUri,
+          ];
     final academicCookies = <WebViewCookie>[];
     for (final domain in academicDomains) {
       academicCookies.addAll(await _cookiesFor(domain));

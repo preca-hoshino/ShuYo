@@ -5,17 +5,17 @@ import 'package:shuyo/data/services/academic_native_auth_service.dart';
 import 'package:shuyo/data/services/verification_delivery_service.dart';
 
 void main() {
-  test('WebVPN is enabled by default and preserves an explicit opt-out',
+  test('WebVPN is disabled by default and preserves an explicit opt-in',
       () async {
     SharedPreferences.setMockInitialValues({});
     final service = ClientSettingsService();
 
-    expect((await service.loadNetworkSettings()).autoUseWebVpnProxy, isTrue);
+    expect((await service.loadNetworkSettings()).webVpnEnabled, isFalse);
 
     await service.saveNetworkSettings(
-      const ClientNetworkSettings(autoUseWebVpnProxy: false),
+      const ClientNetworkSettings(webVpnEnabled: true),
     );
-    expect((await service.loadNetworkSettings()).autoUseWebVpnProxy, isFalse);
+    expect((await service.loadNetworkSettings()).webVpnEnabled, isTrue);
   });
 
   test('startup onboarding completion is stored independently', () async {

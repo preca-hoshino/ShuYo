@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../../core/forum_constants.dart';
 import '../../core/forum_url_resolver.dart';
+import '../../core/classroom_url_resolver.dart';
 import '../models/category.dart';
 import '../models/common.dart';
 import '../models/composer.dart';
@@ -51,6 +52,7 @@ enum ForumConnectionState {
 
 enum ForumRecoveryStatus {
   restored,
+  webVpnLoginRequired,
   requiresReauthentication,
   unavailable,
 }
@@ -2344,7 +2346,10 @@ class ForumRepositoryFactory {
   static Future<void> _configureForumAccessMode() async {
     final settings = await ClientSettingsService().loadNetworkSettings();
     ForumUrlResolver.configure(
-      useWebVpn: settings.autoUseWebVpnProxy,
+      useWebVpn: settings.webVpnEnabled,
+    );
+    ClassroomUrlResolver.configure(
+      useWebVpn: settings.webVpnEnabled,
     );
   }
 }

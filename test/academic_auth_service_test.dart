@@ -9,24 +9,15 @@ import 'package:webview_flutter/webview_flutter.dart';
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
-    ForumUrlResolver.configure(useWebVpn: true);
+    ForumUrlResolver.configure(useWebVpn: false);
   });
 
-  test('restores a cached campus session when WebView cookies are partial',
+  test(
+      'restores a cached direct campus session when WebView cookies are partial',
       () async {
-    final portal = Uri.parse(ForumUrlResolver.webVpnPortalUrl);
-    final academic = Uri.parse(AcademicUrlResolver.webVpnBaseUrl);
+    final academic = Uri.parse(AcademicConstants.baseUrl);
     final first = AcademicAuthService(
       cookieLoader: (domain) async {
-        if (domain.host == portal.host) {
-          return [
-            WebViewCookie(
-              name: 'webvpn-token',
-              value: 'portal-session',
-              domain: portal.host,
-            ),
-          ];
-        }
         if (domain.host == academic.host) {
           return [
             WebViewCookie(
@@ -42,56 +33,33 @@ void main() {
     );
 
     final initialHeader = await first.cookieHeader();
-    expect(initialHeader, contains('webvpn-token=portal-session'));
     expect(initialHeader, contains('JSESSIONID=academic-session'));
 
     final restored = <WebViewCookie>[];
     final restarted = AcademicAuthService(
       cookieLoader: (_) async => const [],
       cookieSetter: (cookie) async => restored.add(cookie),
-      webVpnSessionValidator: (_) async => WebVpnSessionStatus.valid,
+      directSessionValidator: (_) async => WebVpnSessionStatus.valid,
     );
 
-    expect(await restarted.hasWebVpnSession(), isTrue);
-    expect(
-      restored.any(
-        (cookie) =>
-            cookie.name == 'webvpn-token' &&
-            cookie.value == 'portal-session' &&
-            cookie.domain == portal.host,
-      ),
-      isTrue,
-    );
+    expect(await restarted.hasAcademicSession(), isTrue);
     expect(
       await restarted.cookieHeader(),
-      allOf(
-        contains('webvpn-token=portal-session'),
-        contains('JSESSIONID=academic-session'),
-      ),
+      contains('JSESSIONID=academic-session'),
     );
   });
 
-  test('selects the academic-host token for a targeted WebVPN request',
-      () async {
-    final portal = Uri.parse(ForumUrlResolver.webVpnPortalUrl);
-    final academic = Uri.parse(AcademicUrlResolver.webVpnBaseUrl);
+  test('selects path-scoped cookies for a targeted direct request', () async {
+    final academic = Uri.parse(AcademicConstants.baseUrl);
     final service = AcademicAuthService(
       cookieLoader: (domain) async {
-        if (domain.host == portal.host) {
-          return [
-            WebViewCookie(
-              name: 'webvpn-token',
-              value: 'portal-token',
-              domain: portal.host,
-            ),
-          ];
-        }
         if (domain.host == academic.host) {
           return [
             WebViewCookie(
-              name: 'webvpn-token',
-              value: 'academic-token',
+              name: 'JSESSIONID',
+              value: 'academic-session',
               domain: academic.host,
+              path: '/jwglxt',
             ),
             WebViewCookie(
               name: 'route',
@@ -106,19 +74,18 @@ void main() {
     );
 
     final header = await service.cookieHeader(
-      targetUri: Uri.parse('${AcademicUrlResolver.webVpnBaseUrl}/jwglxt/'),
+      targetUri: AcademicUrlResolver.scheduleIndexUri,
     );
-    expect(header, contains('webvpn-token=academic-token'));
-    expect(header, isNot(contains('portal-token')));
+    expect(header, contains('JSESSIONID=academic-session'));
     expect(header, contains('route=node-a'));
   });
 
   test('live academic cookies replace stale cached values across paths',
       () async {
-    final academic = Uri.parse(AcademicUrlResolver.webVpnBaseUrl);
+    final academic = Uri.parse(AcademicConstants.baseUrl);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
-      'academic.auth.cached_cookies.webvpn',
+      'academic.auth.cached_cookies.direct',
       '{"academic":[{"name":"JSESSIONID","value":"stale-session","domain":"${academic.host}","path":"/jwglxt"}]}',
     );
     final service = AcademicAuthService(
@@ -141,12 +108,13 @@ void main() {
     expect(header, contains('JSESSIONID=fresh-session'));
     expect(header, isNot(contains('stale-session')));
     expect(
-      prefs.getString('academic.auth.cached_cookies.webvpn'),
+      prefs.getString('academic.auth.cached_cookies.direct'),
       isNot(contains('stale-session')),
     );
   });
 
-  test('reauthentication clears only persisted campus cookies', () async {
+  test('academic reauthentication preserves the WebVPN session cache',
+      () async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('academic.auth.cached_cookies.direct', 'direct');
     await prefs.setString('academic.auth.cached_cookies.webvpn', 'webvpn');
@@ -160,7 +128,7 @@ void main() {
     await service.clearCachedCookiesForReauthentication();
 
     expect(prefs.getString('academic.auth.cached_cookies.direct'), isNull);
-    expect(prefs.getString('academic.auth.cached_cookies.webvpn'), isNull);
+    expect(prefs.getString('academic.auth.cached_cookies.webvpn'), 'webvpn');
     expect(prefs.getBool('academic.auth.explicitly_signed_out'), isTrue);
     expect(prefs.getString('academic.schedule.cache'), 'schedule');
   });

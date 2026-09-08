@@ -28,9 +28,11 @@ class WebVpnOAuthCompletionPage extends StatefulWidget {
   const WebVpnOAuthCompletionPage({
     super.key,
     required this.callbackUri,
+    this.webVpnOnly = false,
   });
 
   final Uri callbackUri;
+  final bool webVpnOnly;
 
   @override
   State<WebVpnOAuthCompletionPage> createState() =>
@@ -47,7 +49,6 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
   Timer? _resourceErrorTimer;
   bool _completed = false;
   bool _terminalFailure = false;
-  bool _openingAcademicSystem = false;
   bool _finalizingAcademic = false;
   bool _checkingTicketLogin = false;
   String? _lastNavigationUrl;
@@ -59,8 +60,7 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
   @override
   void initState() {
     super.initState();
-    _status =
-        AcademicUrlResolver.usesWebVpn ? '正在建立 WebVPN 校园服务会话' : '正在建立校园网直连会话';
+    _status = widget.webVpnOnly ? '正在建立WebVPN服务会话' : '正在建立教务系统直连会话';
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(Colors.transparent)
@@ -92,7 +92,9 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
     return PopScope(
       canPop: _error != null,
       child: Scaffold(
-        appBar: AppBar(title: const Text('上大校园账户')),
+        appBar: AppBar(
+          title: Text(widget.webVpnOnly ? '登录WebVPN服务' : '上大校园账户'),
+        ),
         body: Stack(
           children: [
             Positioned.fill(
@@ -190,22 +192,24 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
     _clearTransientResourceErrorAfterNavigation(value);
     _lastNavigationUrl = value;
     if (_terminalFailure) return;
-    if (AcademicUrlResolver.usesWebVpn &&
+    if (widget.webVpnOnly &&
         pageFinished &&
         uri.host == _portalUri.host &&
         uri.path.startsWith('/site-nav')) {
-      unawaited(_openAcademicSystem());
+      unawaited(_finishWebVpnLogin());
       return;
     }
     // Android emits onPageStarted before the navigation response has been
     // committed to the CookieManager. Popping at that point races the
     // subsequent schedule sync and loses the freshly-created academic
     // session. Treat the page as ready only after onPageFinished.
-    if (pageFinished && _isAcademicReady(uri)) {
+    if (!widget.webVpnOnly && pageFinished && _isAcademicReady(uri)) {
       unawaited(_finishAcademicLogin());
       return;
     }
-    if (pageFinished && AcademicUrlResolver.isTicketLoginUrl(value)) {
+    if (!widget.webVpnOnly &&
+        pageFinished &&
+        AcademicUrlResolver.isTicketLoginUrl(value)) {
       unawaited(_verifyAfterTicketLogin());
     }
   }
@@ -272,7 +276,7 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
       _clearPendingResourceError();
       return;
     }
-    if (!AcademicUrlResolver.usesWebVpn) {
+    if (!widget.webVpnOnly) {
       _clearPendingResourceError();
       _fail('校园网直连登录会话建立失败：$description');
       return;
@@ -290,7 +294,7 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
           currentUrl,
         );
         _clearPendingResourceError();
-        await _openAcademicSystem();
+        await _finishWebVpnLogin();
         return;
       }
     } on Object {
@@ -324,7 +328,7 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
   }
 
   Future<void> _checkLoginCookie() async {
-    if (_completed || _terminalFailure || !AcademicUrlResolver.usesWebVpn) {
+    if (_completed || _terminalFailure || !widget.webVpnOnly) {
       return;
     }
     final cookies = await WebViewCookieManager().getCookies(domain: _portalUri);
@@ -332,29 +336,19 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
       (cookie) => cookie.name == 'webvpn-token' && cookie.value.isNotEmpty,
     )) {
       _debug('portal session cookie visible names=${_cookieNames(cookies)}');
-      await _openAcademicSystem();
+      await _finishWebVpnLogin();
     }
   }
 
-  Future<void> _openAcademicSystem() async {
-    if (!AcademicUrlResolver.usesWebVpn ||
-        _completed ||
-        _terminalFailure ||
-        _openingAcademicSystem ||
-        !mounted) {
+  Future<void> _finishWebVpnLogin() async {
+    if (_finalizingAcademic || _completed || _terminalFailure || !mounted) {
       return;
     }
-    _openingAcademicSystem = true;
-    _debug('open-academic-system', AcademicUrlResolver.webVpnBaseUrl);
-    setState(() => _status = '正在进入上海大学教务系统');
-    try {
-      await _controller.loadRequest(
-        Uri.parse('${AcademicUrlResolver.webVpnBaseUrl}/'),
-      );
-    } on Object catch (error) {
-      _debug('academic-load-error error=${error.runtimeType}');
-      _fail('WebVPN 已认证，但无法进入教务系统');
-    }
+    _finalizingAcademic = true;
+    if (mounted) setState(() => _status = '正在验证WebVPN服务会话');
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    if (!mounted || _completed || _terminalFailure) return;
+    _succeed();
   }
 
   Future<void> _verifyAfterTicketLogin() async {
@@ -384,9 +378,7 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
   }
 
   bool _isAcademicReady(Uri uri) {
-    final expectedHost = AcademicUrlResolver.usesWebVpn
-        ? AcademicUrlResolver.webVpnHost
-        : AcademicConstants.host;
+    const expectedHost = AcademicConstants.host;
     if (uri.host != expectedHost || !uri.path.startsWith('/jwglxt/')) {
       return false;
     }

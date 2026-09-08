@@ -17,9 +17,8 @@ enum ForumOAuthCompletionResult { loggedIn }
 
 @visibleForTesting
 bool isForumRegistrationUri(Uri uri) {
-  if (!ForumUrlResolver.usesWebVpn ||
-      uri.scheme != 'https' ||
-      uri.host.toLowerCase() != ForumUrlResolver.webVpnHost) {
+  if (uri.scheme != 'https' ||
+      !ForumUrlResolver.isActiveForumHost(uri.host.toLowerCase())) {
     return false;
   }
   return uri.path == '/login';
@@ -27,9 +26,8 @@ bool isForumRegistrationUri(Uri uri) {
 
 @visibleForTesting
 bool isForumRegistrationCompletionUri(Uri uri) {
-  if (!ForumUrlResolver.usesWebVpn ||
-      uri.scheme != 'https' ||
-      uri.host.toLowerCase() != ForumUrlResolver.webVpnHost) {
+  if (uri.scheme != 'https' ||
+      !ForumUrlResolver.isActiveForumHost(uri.host.toLowerCase())) {
     return false;
   }
   final path = uri.path.toLowerCase();
@@ -37,9 +35,8 @@ bool isForumRegistrationCompletionUri(Uri uri) {
 }
 
 bool _isForumRegistrationFlowUri(Uri uri) {
-  if (!ForumUrlResolver.usesWebVpn ||
-      uri.scheme != 'https' ||
-      uri.host.toLowerCase() != ForumUrlResolver.webVpnHost) {
+  if (uri.scheme != 'https' ||
+      !ForumUrlResolver.isActiveForumHost(uri.host.toLowerCase())) {
     return false;
   }
   final path = uri.path.toLowerCase();

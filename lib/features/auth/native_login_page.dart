@@ -4,12 +4,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../data/services/academic_native_auth_service.dart';
+import '../../data/services/academic_account_store.dart';
+import '../../data/services/academic_auth_service.dart';
 import '../../data/services/verification_delivery_service.dart';
 import '../../data/demo/demo_session.dart';
 import 'forum_oauth_completion_page.dart';
 import 'webvpn_oauth_completion_page.dart';
 
-enum NativeLoginDestination { academic, forum }
+enum NativeLoginDestination { academic, forum, webVpn }
 
 enum NativeLoginResult { authenticated, demo }
 
@@ -22,6 +24,9 @@ class NativeLoginPage extends StatefulWidget {
   const NativeLoginPage.forum({super.key})
       : destination = NativeLoginDestination.forum;
 
+  const NativeLoginPage.webVpn({super.key})
+      : destination = NativeLoginDestination.webVpn;
+
   final NativeLoginDestination destination;
 
   @override
@@ -30,9 +35,11 @@ class NativeLoginPage extends StatefulWidget {
 
 class _NativeLoginPageState extends State<NativeLoginPage> {
   late final AcademicNativeAuthService _authService =
-      widget.destination == NativeLoginDestination.forum
-          ? AcademicNativeAuthService.forForum()
-          : AcademicNativeAuthService();
+      switch (widget.destination) {
+    NativeLoginDestination.forum => AcademicNativeAuthService.forForum(),
+    NativeLoginDestination.webVpn => AcademicNativeAuthService.forWebVpn(),
+    NativeLoginDestination.academic => AcademicNativeAuthService(),
+  };
   final _verificationDeliveryService = VerificationDeliveryService();
   final _studentId = TextEditingController();
   final _password = TextEditingController();
@@ -68,9 +75,11 @@ class _NativeLoginPageState extends State<NativeLoginPage> {
       child: Scaffold(
         appBar: AppBar(
           title: Text(switch (_step) {
-            0 => widget.destination == NativeLoginDestination.forum
-                ? '乐乎论坛账户'
-                : '上大校园账户',
+            0 => switch (widget.destination) {
+                NativeLoginDestination.forum => '乐乎论坛账户',
+                NativeLoginDestination.webVpn => '登录WebVPN服务',
+                NativeLoginDestination.academic => '上大校园账户',
+              },
             _ => '验证身份',
           }),
         ),
@@ -94,9 +103,11 @@ class _NativeLoginPageState extends State<NativeLoginPage> {
           padding: const EdgeInsets.all(24),
           children: [
             Text(
-              widget.destination == NativeLoginDestination.forum
-                  ? '登录论坛账户'
-                  : '登录校园账户',
+              switch (widget.destination) {
+                NativeLoginDestination.forum => '登录论坛账户',
+                NativeLoginDestination.webVpn => '登录WebVPN服务',
+                NativeLoginDestination.academic => '登录校园账户',
+              },
               style: Theme.of(context)
                   .textTheme
                   .titleLarge
@@ -266,7 +277,7 @@ class _NativeLoginPageState extends State<NativeLoginPage> {
     } on AcademicNativeAuthException catch (error) {
       _showError(error.message);
     } on Object {
-      _showError('无法连接学校认证服务，请检查网络后重试');
+      _showError('无法连接学校认证服务，请使用校园网访问');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -338,12 +349,29 @@ class _NativeLoginPageState extends State<NativeLoginPage> {
     }
     final completed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
-        builder: (_) => WebVpnOAuthCompletionPage(callbackUri: callbackUri),
+        builder: (_) => WebVpnOAuthCompletionPage(
+          callbackUri: callbackUri,
+          webVpnOnly: widget.destination == NativeLoginDestination.webVpn,
+        ),
       ),
     );
-    if (completed == true && mounted) {
-      Navigator.of(context).pop(NativeLoginResult.authenticated);
+    if (completed != true || !mounted) return;
+    final auth = AcademicAuthService();
+    final status = widget.destination == NativeLoginDestination.webVpn
+        ? await auth.validateWebVpnSession()
+        : await auth.validateDirectAcademicSession();
+    if (!mounted) return;
+    if (status != WebVpnSessionStatus.valid) {
+      _showError(widget.destination == NativeLoginDestination.webVpn
+          ? 'WebVPN登录未完成，请重试'
+          : '教务系统登录未完成，请重试');
+      return;
     }
+    if (widget.destination == NativeLoginDestination.academic) {
+      await AcademicAccountStore().saveStudentId(_studentId.text);
+      await auth.markLoggedIn();
+    }
+    if (mounted) Navigator.of(context).pop(NativeLoginResult.authenticated);
   }
 
   String _describeRedirectUri(String? value) {

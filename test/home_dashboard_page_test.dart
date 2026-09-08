@@ -23,6 +23,7 @@ void main() {
             hasLocalAccount: false,
             forumRequiresReauthentication: false,
             hasAcademicAccount: true,
+            academicStudentId: '25120001',
             isAcademicLoginCompleting: false,
             isCheckingConnection: false,
             isInitialConnectionCheck: false,
@@ -33,8 +34,6 @@ void main() {
             onOpenAnnouncements: () {},
             onOpenEmptyClassroom: () {},
             onOpenCourseRatings: () {},
-            showForumNetworkWarning: false,
-            onOpenWebVpnProxy: () {},
             todayCourseContent: '今日暂无课程',
             announcementContent: '暂无公告',
           ),
@@ -42,11 +41,11 @@ void main() {
       ),
     );
 
-    expect(find.text('你好！'), findsOneWidget);
-    expect(find.text('暂未登录乐乎论坛'), findsOneWidget);
+    expect(find.text('你好，25120001！'), findsOneWidget);
+    expect(find.text('点此登录乐乎论坛'), findsOneWidget);
     expect(find.text('立即登录'), findsNothing);
 
-    await tester.tap(find.text('你好！'));
+    await tester.tap(find.text('你好，25120001！'));
     expect(loginTapped, isTrue);
   });
 
@@ -78,8 +77,6 @@ void main() {
             onOpenAnnouncements: () {},
             onOpenEmptyClassroom: () {},
             onOpenCourseRatings: () {},
-            showForumNetworkWarning: false,
-            onOpenWebVpnProxy: () {},
             todayCourseContent: '今日暂无课程',
             announcementContent: '暂无公告',
           ),
@@ -119,8 +116,6 @@ void main() {
             onOpenAnnouncements: () {},
             onOpenEmptyClassroom: () {},
             onOpenCourseRatings: () {},
-            showForumNetworkWarning: false,
-            onOpenWebVpnProxy: () {},
             todayCourseContent: '课表获取中...',
             announcementContent: '暂无公告',
           ),
@@ -163,8 +158,6 @@ void main() {
             onOpenAnnouncements: () {},
             onOpenEmptyClassroom: () {},
             onOpenCourseRatings: () {},
-            showForumNetworkWarning: false,
-            onOpenWebVpnProxy: () {},
             todayCourseContent: '今日暂无课程',
             announcementContent: '暂无公告',
           ),

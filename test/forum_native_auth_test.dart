@@ -61,7 +61,7 @@ void main() {
     });
   });
 
-  test('recognizes only the exact WebVPN registration route', () {
+  test('recognizes the exact registration route for both access modes', () {
     expect(
       isForumRegistrationUri(
         Uri.parse(
@@ -72,17 +72,18 @@ void main() {
     );
     expect(
       isForumRegistrationUri(
-        Uri.parse('https://bbs.shu.edu.cn/login'),
-      ),
-      isFalse,
-    );
-    expect(
-      isForumRegistrationUri(
         Uri.parse(
           'https://https-bbs-shu-edu-cn-443.webvpn.shu.edu.cn/signup',
         ),
       ),
       isFalse,
+    );
+    ForumUrlResolver.configure(useWebVpn: false);
+    expect(
+      isForumRegistrationUri(
+        Uri.parse('https://bbs.shu.edu.cn/login'),
+      ),
+      isTrue,
     );
   });
 
@@ -116,6 +117,13 @@ void main() {
         ),
       ),
       isFalse,
+    );
+    ForumUrlResolver.configure(useWebVpn: false);
+    expect(
+      isForumRegistrationCompletionUri(
+        Uri.parse('https://bbs.shu.edu.cn/latest'),
+      ),
+      isTrue,
     );
   });
 

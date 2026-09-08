@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import '../../core/forum_constants.dart';
+import '../../core/certificate_policy.dart';
 import 'http_timeout.dart';
 
 enum ForumReachabilityStatus {
@@ -35,7 +36,7 @@ class ForumReachabilityService {
     final client = HttpClient()..connectionTimeout = timeout;
     if (defaultTargetPlatform == TargetPlatform.android) {
       client.badCertificateCallback = (certificate, host, port) {
-        return host == ForumConstants.host;
+        return CertificatePolicy.allowsHost(host);
       };
     }
     try {

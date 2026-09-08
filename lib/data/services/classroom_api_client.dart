@@ -9,6 +9,7 @@ import '../../core/client_user_agent.dart';
 import '../models/classroom.dart';
 import '../models/common.dart';
 import 'classroom_auth_service.dart';
+import 'academic_auth_service.dart';
 import 'http_timeout.dart';
 
 class ClassroomApiException implements Exception {
@@ -25,6 +26,10 @@ class ClassroomApiException implements Exception {
     }
     return '$message ($code)';
   }
+}
+
+class ClassroomWebVpnAuthException extends ClassroomApiException {
+  const ClassroomWebVpnAuthException() : super('WebVPN已失效，需要重新登录');
 }
 
 class ClassroomApiClient {
@@ -101,30 +106,42 @@ class ClassroomApiClient {
     String path, {
     Map<String, String>? body,
   }) async {
-    final headers = await _headers();
-    final response = await HttpTimeout.request(
-      _httpClient.post(
-        ClassroomUrlResolver.uri(path),
-        headers: headers,
-        body: body,
-      ),
-      message: '空教室查询请求超时，请稍后再试',
-    );
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw ClassroomApiException(
-        '空教室查询请求失败',
-        statusCode: response.statusCode,
+    try {
+      final headers = await _headers();
+      final response = await HttpTimeout.request(
+        _httpClient.post(
+          ClassroomUrlResolver.uri(path),
+          headers: headers,
+          body: body,
+        ),
+        message: '空教室查询请求超时，请稍后再试',
       );
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw ClassroomApiException(
+          '空教室查询请求失败',
+          statusCode: response.statusCode,
+        );
+      }
+      final decoded = _decodeJson(response.bodyBytes);
+      final code = intValue(decoded['code']);
+      if (code != 200) {
+        throw ClassroomApiException(
+          stringValue(decoded['msg'], '空教室查询失败'),
+          statusCode: code,
+        );
+      }
+      return decoded;
+    } on ClassroomWebVpnAuthException {
+      rethrow;
+    } on Object {
+      if (ClassroomUrlResolver.usesWebVpn) {
+        final status = await AcademicAuthService().validateWebVpnSession();
+        if (status == WebVpnSessionStatus.loginRequired) {
+          throw const ClassroomWebVpnAuthException();
+        }
+      }
+      rethrow;
     }
-    final decoded = _decodeJson(response.bodyBytes);
-    final code = intValue(decoded['code']);
-    if (code != 200) {
-      throw ClassroomApiException(
-        stringValue(decoded['msg'], '空教室查询失败'),
-        statusCode: code,
-      );
-    }
-    return decoded;
   }
 
   Future<Map<String, String>> _headers() async {
@@ -137,7 +154,7 @@ class ClassroomApiClient {
     if (ClassroomUrlResolver.usesWebVpn) {
       final cookie = await _authService.cookieHeader();
       if (cookie == null || cookie.isEmpty) {
-        throw const ClassroomApiException('请先登录WebVPN后再查询空教室');
+        throw const ClassroomWebVpnAuthException();
       }
       headers['cookie'] = cookie;
     }

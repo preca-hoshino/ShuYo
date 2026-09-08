@@ -49,53 +49,11 @@ void main() {
     expect(find.text('关于ShuYo'), findsOneWidget);
   });
 
-  testWidgets('iOS cannot disable automatic WebVPN proxy', (tester) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-    try {
-      SharedPreferences.setMockInitialValues({
-        ClientSettingsService.autoUseWebVpnProxyKey: true,
-      });
+  testWidgets('settings no longer exposes WebVPN controls', (tester) async {
+    await _pumpSettings(tester);
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: ClientSettingsPage(
-            settingsService: ClientSettingsService(),
-            scheduleNotificationService: AcademicScheduleNotificationService(
-              repository: AcademicScheduleRepository(
-                apiClient: AcademicScheduleApiClient(
-                  authService: _FakeAcademicAuthService(),
-                  httpClient: MockClient(
-                    (_) async => http.Response('{}', 200),
-                  ),
-                ),
-              ),
-            ),
-            backendRepository: ClientBackendRepository(),
-            selectedThemeId: 'default',
-            followSystemTheme: false,
-            onThemeChanged: (_) async {},
-            onFollowSystemThemeChanged: (_) async {},
-          ),
-        ),
-      );
-
-      await tester.tap(find.text('WebVPN代理'));
-      await tester.pumpAndSettle();
-      expect(find.text('自动使用WebVPN代理'), findsOneWidget);
-
-      await tester.tap(find.byType(Switch));
-      await tester.pump();
-
-      expect(find.text('暂不支持，待后续版本接入'), findsOneWidget);
-      expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
-      expect(
-        (await ClientSettingsService().loadNetworkSettings())
-            .autoUseWebVpnProxy,
-        isTrue,
-      );
-    } finally {
-      debugDefaultTargetPlatformOverride = null;
-    }
+    expect(find.text('WebVPN代理'), findsNothing);
+    expect(find.text('自动使用WebVPN代理'), findsNothing);
   });
 
   testWidgets('about page exposes project privacy and support information',
