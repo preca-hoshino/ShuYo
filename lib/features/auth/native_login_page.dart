@@ -357,6 +357,9 @@ class _NativeLoginPageState extends State<NativeLoginPage> {
     );
     if (completed != true || !mounted) return;
     final auth = AcademicAuthService();
+    if (widget.destination == NativeLoginDestination.academic) {
+      await auth.markLoggedIn();
+    }
     final status = widget.destination == NativeLoginDestination.webVpn
         ? await auth.validateWebVpnSession()
         : await auth.validateDirectAcademicSession();
@@ -369,7 +372,6 @@ class _NativeLoginPageState extends State<NativeLoginPage> {
     }
     if (widget.destination == NativeLoginDestination.academic) {
       await AcademicAccountStore().saveStudentId(_studentId.text);
-      await auth.markLoggedIn();
     }
     if (mounted) Navigator.of(context).pop(NativeLoginResult.authenticated);
   }

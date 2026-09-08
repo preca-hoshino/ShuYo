@@ -292,34 +292,12 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
     if (!mounted) {
       return;
     }
-    final retry = await showDialog<bool>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('需要登录教务系统'),
-          content: const Text('请先在教务系统完成登录，然后回到这里刷新课表。'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('去登录'),
-            ),
-          ],
-        );
-      },
-    );
-    if (retry != true || !mounted) {
-      return;
-    }
+    _showSnack('校园账户登录信息已过期，请重新登录');
     await widget.onLoginRequired();
     if (!mounted) {
       return;
     }
     await _loadCached();
-    if (mounted && _schedule != null) _showSnack('课表已同步');
   }
 
   Future<void> _setFirstWeekStartDate() async {

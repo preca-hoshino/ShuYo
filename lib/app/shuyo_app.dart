@@ -14,7 +14,6 @@ import '../data/demo/demo_repositories.dart';
 import '../data/demo/demo_session.dart';
 import '../data/repositories/academic_schedule_repository.dart';
 import '../data/repositories/forum_repository.dart';
-import '../data/services/academic_auth_service.dart';
 import '../data/services/academic_account_store.dart';
 import '../data/services/academic_schedule_display_settings_service.dart';
 import '../data/services/app_data_migration_service.dart';
@@ -116,6 +115,7 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
           return StartupOnboarding(
             initiallyCompleted: demo || data.onboardingCompleted,
             initialAcademicLoggedIn: demo || data.hasAcademicSession,
+            initialAcademicExpired: !demo && data.academicSessionExpired,
             initialForumStatus: demo
                 ? ForumAccountStatus.loggedIn
                 : _forumAccountStatus(repository),
@@ -141,6 +141,8 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
               academicLoginSignal: _academicLoginSignal,
               forumLoginSignal: _forumLoginSignal,
               initialHasAcademicSession: demo || data.hasAcademicSession,
+              initialAcademicSessionExpired:
+                  !demo && data.academicSessionExpired,
               initialAcademicStudentId: demo
                   ? data.initialScheduleState?.schedule?.term.studentId
                   : data.academicStudentId,
@@ -191,8 +193,10 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
       useWebVpn: networkSettings.webVpnEnabled,
     );
     final repository = await ForumRepositoryFactory.load();
-    final hasAcademicSession = await AcademicAuthService().hasAcademicSession();
-    final academicStudentId = await AcademicAccountStore().loadStudentId();
+    final academicAccountStore = AcademicAccountStore();
+    final academicStudentId = await academicAccountStore.loadStudentId();
+    final academicSessionExpired = academicStudentId != null &&
+        await academicAccountStore.isSessionExpired();
     final onboardingCompleted =
         await _settingsService.loadStartupOnboardingCompleted();
     final initialScheduleLoad = openScheduleFromWidget && onboardingCompleted
@@ -201,7 +205,8 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
     return _StartupData(
       repository: repository,
       webVpnEnabled: networkSettings.webVpnEnabled,
-      hasAcademicSession: hasAcademicSession,
+      hasAcademicSession: academicStudentId != null,
+      academicSessionExpired: academicSessionExpired,
       academicStudentId: academicStudentId,
       onboardingCompleted: onboardingCompleted,
       demoMode: false,
@@ -229,6 +234,7 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
       repository: demoRepository,
       webVpnEnabled: false,
       hasAcademicSession: true,
+      academicSessionExpired: false,
       academicStudentId: initialScheduleLoad.state?.schedule?.term.studentId,
       onboardingCompleted: true,
       demoMode: true,
@@ -371,6 +377,7 @@ class _StartupData {
     required this.repository,
     required this.webVpnEnabled,
     required this.hasAcademicSession,
+    required this.academicSessionExpired,
     required this.academicStudentId,
     required this.onboardingCompleted,
     required this.demoMode,
@@ -383,6 +390,7 @@ class _StartupData {
   final ForumRepository repository;
   final bool webVpnEnabled;
   final bool hasAcademicSession;
+  final bool academicSessionExpired;
   final String? academicStudentId;
   final bool onboardingCompleted;
   final bool demoMode;

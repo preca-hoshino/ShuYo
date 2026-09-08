@@ -6,6 +6,7 @@ class AcademicAccountStore {
   }) : _preferencesLoader = preferencesLoader ?? SharedPreferences.getInstance;
 
   static const studentIdKey = 'academic.account.student_id';
+  static const sessionExpiredKey = 'academic.account.session_expired';
 
   final Future<SharedPreferences> Function() _preferencesLoader;
 
@@ -17,10 +18,29 @@ class AcademicAccountStore {
   Future<void> saveStudentId(String studentId) async {
     final normalized = studentId.trim();
     if (normalized.isEmpty) return;
-    await (await _preferencesLoader()).setString(studentIdKey, normalized);
+    final preferences = await _preferencesLoader();
+    await Future.wait([
+      preferences.setString(studentIdKey, normalized),
+      preferences.setBool(sessionExpiredKey, false),
+    ]);
+  }
+
+  Future<bool> isSessionExpired() async {
+    return (await _preferencesLoader()).getBool(sessionExpiredKey) ?? false;
+  }
+
+  Future<void> markSessionExpired() async {
+    final preferences = await _preferencesLoader();
+    if (preferences.getString(studentIdKey)?.trim().isNotEmpty == true) {
+      await preferences.setBool(sessionExpiredKey, true);
+    }
   }
 
   Future<void> clear() async {
-    await (await _preferencesLoader()).remove(studentIdKey);
+    final preferences = await _preferencesLoader();
+    await Future.wait([
+      preferences.remove(studentIdKey),
+      preferences.remove(sessionExpiredKey),
+    ]);
   }
 }

@@ -81,6 +81,7 @@ class AppShell extends StatefulWidget {
     required this.academicLoginSignal,
     required this.forumLoginSignal,
     required this.initialHasAcademicSession,
+    required this.initialAcademicSessionExpired,
     required this.initialAcademicStudentId,
     required this.onboardingController,
     this.initialOpenSchedule = false,
@@ -102,6 +103,7 @@ class AppShell extends StatefulWidget {
   final int academicLoginSignal;
   final int forumLoginSignal;
   final bool initialHasAcademicSession;
+  final bool initialAcademicSessionExpired;
   final String? initialAcademicStudentId;
   final bool initialOpenSchedule;
   final AcademicScheduleCacheState? initialScheduleState;
@@ -161,6 +163,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   bool _webVpnReloginRequired = false;
   late bool _webVpnEnabled;
   late bool _hasAcademicSession;
+  late bool _academicSessionExpired;
   String? _academicStudentId;
   int _seenNotificationBadgeCount = 0;
   int _seenMessageBadgeCount = 0;
@@ -199,6 +202,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     _repo = widget.repository;
     _webVpnEnabled = widget.initialWebVpnEnabled;
     _hasAcademicSession = widget.initialHasAcademicSession;
+    _academicSessionExpired = widget.initialAcademicSessionExpired;
     _academicStudentId = widget.initialAcademicStudentId;
     final demoData = widget.demoData;
     _scheduleRepository = widget.isDemo && demoData != null
@@ -291,7 +295,12 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     if (widget.isDemo) {
       return;
     }
-    if (mounted) setState(() => _hasAcademicSession = true);
+    if (mounted) {
+      setState(() {
+        _hasAcademicSession = true;
+        _academicSessionExpired = false;
+      });
+    }
     await _loadAcademicStudentId();
     _syncOnboardingAccountStatus();
     await _persistAcademicLoginCookies();
@@ -946,6 +955,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     }
     widget.onboardingController.openAccountManager(
       academicLoggedIn: _hasAcademicSession,
+      academicExpired: _academicSessionExpired,
       forumStatus: _forumAccountStatus,
       webVpnEnabled: _webVpnEnabled,
       webVpnServiceStatus: _webVpnServiceStatus,
@@ -984,6 +994,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
       if (!mounted) return;
       widget.onboardingController.updateAccountStatus(
         academicLoggedIn: _hasAcademicSession,
+        academicExpired: _academicSessionExpired,
         forumStatus: _forumAccountStatus,
         webVpnEnabled: _webVpnEnabled,
         webVpnServiceStatus: _webVpnServiceStatus,
@@ -2183,6 +2194,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
       if (!mounted) return false;
       setState(() {
         _hasAcademicSession = false;
+        _academicSessionExpired = false;
         _academicStudentId = null;
         _reloadingSession = false;
         if (ForumUrlResolver.usesWebVpn) {
@@ -2269,7 +2281,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
         repository: _scheduleRepository,
         notificationService: _scheduleNotificationService,
         widgetService: _scheduleWidgetService,
-        onLoginRequired: _openAcademicLogin,
+        onLoginRequired: _reauthenticateExpiredAcademicAccount,
         initialState: initialState,
         initialDisplayState: initialDisplayState,
         initialLoadError: initialLoadError,
@@ -2525,11 +2537,22 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     _debugAcademicFlow(
         'campus login returned result=${result?.name ?? 'cancelled'}');
     if (result != NativeLoginResult.authenticated || !mounted) return;
-    setState(() => _hasAcademicSession = true);
+    setState(() {
+      _hasAcademicSession = true;
+      _academicSessionExpired = false;
+    });
     await _loadAcademicStudentId();
     _syncOnboardingAccountStatus();
     await _persistAcademicLoginCookies();
     await _syncScheduleAfterAcademicLogin();
+  }
+
+  Future<void> _reauthenticateExpiredAcademicAccount() async {
+    await AcademicAccountStore().markSessionExpired();
+    if (!mounted) return;
+    setState(() => _academicSessionExpired = true);
+    _syncOnboardingAccountStatus();
+    await _openAcademicLogin();
   }
 
   void _debugAcademicFlow(String message, {StackTrace? stackTrace}) {
