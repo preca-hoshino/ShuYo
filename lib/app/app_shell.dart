@@ -240,7 +240,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     );
     _syncOnboardingAccountStatus();
     _resetFeedFuture();
-    if (Platform.isAndroid) {
+    if (Platform.isAndroid || Platform.isIOS) {
       _widgetClickSubscription =
           HomeWidget.widgetClicked.listen(_handleWidgetClick);
       if (widget.initialOpenSchedule) {

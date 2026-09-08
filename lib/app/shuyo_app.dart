@@ -256,7 +256,7 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
   }
 
   Future<bool> _loadInitialScheduleWidgetLaunch() async {
-    if (!Platform.isAndroid) return false;
+    if (!Platform.isAndroid && !Platform.isIOS) return false;
     try {
       final uri = await HomeWidget.initiallyLaunchedFromHomeWidget();
       return uri?.scheme == 'shuyo' && uri?.host == 'schedule';

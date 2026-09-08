@@ -86,24 +86,10 @@ abstract class ScheduleWidgetBaseProvider(
         val nowMinute = now.hour * 60 + now.minute
         val upcoming = todayCourses.firstOrNull { it.endMinute >= nowMinute }
 
-        if (compact) {
-            bindCompact(
-                views,
-                activeWeek,
-                today.dayOfWeek.value,
-                todayCourses,
-                upcoming,
-                nowMinute,
-                isVacation
-            )
-            return views
-        }
-
-        val todayFinished = todayCourses.isNotEmpty() && upcoming == null
         val tomorrow = today.plusDays(1)
         val tomorrowWeek = schedule.activeWeek(tomorrow)
         val tomorrowCourses = if (
-            todayFinished && tomorrowWeek in 1..schedule.maxWeek
+            upcoming == null && tomorrowWeek in 1..schedule.maxWeek
         ) {
             schedule.courses
                 .filter { course ->
@@ -114,6 +100,23 @@ abstract class ScheduleWidgetBaseProvider(
         } else {
             emptyList()
         }
+
+        if (compact) {
+            bindCompact(
+                views,
+                activeWeek,
+                today.dayOfWeek.value,
+                todayCourses,
+                upcoming,
+                tomorrowCourses.firstOrNull(),
+                tomorrowWeek,
+                tomorrow.dayOfWeek.value,
+                nowMinute,
+                isVacation
+            )
+            return views
+        }
+
         val showingTomorrow = tomorrowCourses.isNotEmpty()
         val visibleCourses = if (showingTomorrow) {
             tomorrowCourses.take(rowBindings.size)
@@ -135,7 +138,9 @@ abstract class ScheduleWidgetBaseProvider(
         )
         views.setTextViewText(
             R.id.widget_meta,
-            if (isVacation) {
+            if (showingTomorrow) {
+                "第${displayWeek}周 · ${weekdayName(displayWeekday)}"
+            } else if (isVacation) {
                 "假期中 · ${weekdayName(today.dayOfWeek.value)}"
             } else {
                 "第${displayWeek}周 · ${weekdayName(displayWeekday)}"
@@ -143,10 +148,10 @@ abstract class ScheduleWidgetBaseProvider(
         )
         views.setTextViewText(
             R.id.widget_status,
-            if (isVacation) {
-                "假期中"
-            } else if (showingTomorrow) {
+            if (showingTomorrow) {
                 "明天的课程"
+            } else if (isVacation) {
+                "假期中"
             } else {
                 statusText(todayCourses, upcoming, nowMinute)
             }
@@ -180,16 +185,31 @@ abstract class ScheduleWidgetBaseProvider(
         weekday: Int,
         todayCourses: List<WidgetCourse>,
         upcoming: WidgetCourse?,
+        tomorrowCourse: WidgetCourse?,
+        tomorrowWeek: Int,
+        tomorrowWeekday: Int,
         nowMinute: Int,
         isVacation: Boolean
     ) {
+        val showingTomorrow = tomorrowCourse != null
         views.setTextViewText(R.id.widget_title, "课表")
         views.setTextViewText(
             R.id.widget_meta,
-            if (isVacation) "假期中 · ${weekdayName(weekday)}"
+            if (showingTomorrow) "第${tomorrowWeek}周 · ${weekdayName(tomorrowWeekday)}"
+            else if (isVacation) "假期中 · ${weekdayName(weekday)}"
             else "第${activeWeek}周 · ${weekdayName(weekday)}"
         )
         views.setTextViewText(R.id.compact_course_meta, "")
+        if (tomorrowCourse != null) {
+            val place = tomorrowCourse.room.ifBlank { tomorrowCourse.sectionText }
+            views.setTextViewText(R.id.widget_status, tomorrowCourse.name)
+            views.setTextViewText(
+                R.id.compact_course_meta,
+                if (place.isBlank()) "明天 ${tomorrowCourse.startText}"
+                else "明天 ${tomorrowCourse.startText} · $place"
+            )
+            return
+        }
         if (isVacation) {
             views.setTextViewText(R.id.widget_status, "假期中")
             return
