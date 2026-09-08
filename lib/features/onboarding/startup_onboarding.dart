@@ -914,11 +914,33 @@ class _StartupOnboardingState extends State<StartupOnboarding>
 
   Future<void> _changeWebVpn(bool enabled) async {
     if (_changingWebVpn) return;
-    if (!enabled) {
+    if (enabled &&
+        !_webVpnEnabled &&
+        _forumStatus == ForumAccountStatus.loggedIn) {
       final confirmed = await showDialog<bool>(
             context: context,
             builder: (context) => AlertDialog(
-              title: const Text('关闭WebVPN连接？'),
+              title: const Text('开启WebVPN连接'),
+              content: const Text('开启后需要重新登录论坛账户'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  child: const Text('继续'),
+                ),
+              ],
+            ),
+          ) ??
+          false;
+      if (!confirmed || !mounted) return;
+    } else if (!enabled) {
+      final confirmed = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('关闭WebVPN连接'),
               content: const Text('关闭后需重新登录论坛账户'),
               actions: [
                 TextButton(

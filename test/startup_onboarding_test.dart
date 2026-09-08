@@ -275,6 +275,50 @@ void main() {
     expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
   });
 
+  testWidgets('enabling WebVPN confirms when the direct forum is logged in',
+      (tester) async {
+    final controller = StartupOnboardingController();
+    var changeRequested = false;
+    controller.setWebVpnChangeHandler((enabled) async {
+      changeRequested = true;
+      return true;
+    });
+    await tester.pumpWidget(app(
+      completed: true,
+      academicLoggedIn: true,
+      forumStatus: ForumAccountStatus.loggedIn,
+      controller: controller,
+    ));
+    controller.openAccountManager(
+      academicLoggedIn: true,
+      forumStatus: ForumAccountStatus.loggedIn,
+    );
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.text('使用WebVPN连接'));
+    await tester.tap(find.text('使用WebVPN连接'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byType(Switch));
+    await tester.tap(find.byType(Switch));
+    await tester.pumpAndSettle();
+
+    expect(find.text('开启WebVPN连接'), findsOneWidget);
+    expect(find.text('开启后需要重新登录论坛账户'), findsOneWidget);
+    expect(changeRequested, isFalse);
+
+    await tester.tap(find.widgetWithText(TextButton, '取消'));
+    await tester.pumpAndSettle();
+    expect(changeRequested, isFalse);
+    expect(tester.widget<Switch>(find.byType(Switch)).value, isFalse);
+
+    await tester.tap(find.byType(Switch));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '继续'));
+    await tester.pumpAndSettle();
+    expect(changeRequested, isTrue);
+    expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
+  });
+
   testWidgets('keeps forum account status synchronized while manager is open',
       (tester) async {
     final controller = StartupOnboardingController();
