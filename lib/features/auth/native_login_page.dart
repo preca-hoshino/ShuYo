@@ -7,9 +7,12 @@ import '../../data/services/academic_native_auth_service.dart';
 import '../../data/services/academic_account_store.dart';
 import '../../data/services/academic_auth_service.dart';
 import '../../data/services/verification_delivery_service.dart';
+import '../../data/services/wecom_auth_service.dart';
+import '../../core/wecom_constants.dart';
 import '../../data/demo/demo_session.dart';
 import 'forum_oauth_completion_page.dart';
 import 'webvpn_oauth_completion_page.dart';
+import 'wecom_scan_page.dart';
 
 enum NativeLoginDestination { academic, forum, webVpn }
 
@@ -34,13 +37,15 @@ class NativeLoginPage extends StatefulWidget {
 }
 
 class _NativeLoginPageState extends State<NativeLoginPage> {
-  late final AcademicNativeAuthService _authService =
-      switch (widget.destination) {
-    NativeLoginDestination.forum => AcademicNativeAuthService.forForum(),
-    NativeLoginDestination.webVpn => AcademicNativeAuthService.forWebVpn(),
-    NativeLoginDestination.academic => AcademicNativeAuthService(),
-  };
+  AcademicNativeAuthService? _authServiceInstance;
+  AcademicNativeAuthService get _authService =>
+      _authServiceInstance ??= switch (widget.destination) {
+        NativeLoginDestination.forum => AcademicNativeAuthService.forForum(),
+        NativeLoginDestination.webVpn => AcademicNativeAuthService.forWebVpn(),
+        NativeLoginDestination.academic => AcademicNativeAuthService(),
+      };
   final _verificationDeliveryService = VerificationDeliveryService();
+  final _weComAuthService = WeComAuthService();
   final _studentId = TextEditingController();
   final _password = TextEditingController();
   final _code = TextEditingController();
@@ -58,7 +63,8 @@ class _NativeLoginPageState extends State<NativeLoginPage> {
   @override
   void dispose() {
     _countdownTimer?.cancel();
-    _authService.dispose();
+    _authServiceInstance?.dispose();
+    _weComAuthService.dispose();
     _studentId.dispose();
     _password.dispose();
     _code.dispose();
@@ -160,6 +166,25 @@ class _NativeLoginPageState extends State<NativeLoginPage> {
                   minimumSize: const Size.fromHeight(50)),
               child: _buttonContent('继续'),
             ),
+            if (widget.destination != NativeLoginDestination.webVpn) ...[
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: _busy ? null : _startWeComLogin,
+                icon: const Icon(Icons.qr_code_scanner_outlined),
+                label: const Text('使用企业微信登录'),
+                style: OutlinedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(50)),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '使用企业微信扫码登录，可在手机企业微信中确认登录。',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
           ],
         ),
       );
@@ -283,6 +308,48 @@ class _NativeLoginPageState extends State<NativeLoginPage> {
     }
   }
 
+  Future<void> _startWeComLogin() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final session = await _weComAuthService.startQrSession();
+      if (!mounted) return;
+      setState(() => _busy = false);
+      final redeemed = await Navigator.of(context).push<WeComRedeemResult>(
+        MaterialPageRoute(
+          builder: (_) => WeComScanPage(
+            session: session,
+            authService: _weComAuthService,
+            target: _weComTarget,
+          ),
+        ),
+      );
+      if (redeemed == null || !mounted) return;
+      await _completeLogin(
+        redeemed.callbackUri,
+        weComRedeem: redeemed,
+      );
+    } on WeComAuthException catch (error) {
+      _showError(error.message);
+    } on Object catch (error, stackTrace) {
+      if (kDebugMode) {
+        debugPrint('[SHU_WECOM] unexpected error type=${error.runtimeType} '
+            'error=$error');
+        debugPrintStack(label: '[SHU_WECOM] stack', stackTrace: stackTrace);
+      }
+      _showError('无法连接企业微信服务，请稍后再试');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// 企微扫码登录的目标系统参数，必须与用户正在登录的入口一致，
+  /// 否则 SSO 会把授权码下发给错误的业务系统。
+  WeComOAuthTarget get _weComTarget =>
+      widget.destination == NativeLoginDestination.forum
+          ? WeComOAuthTarget.forum
+          : WeComOAuthTarget.academic;
+
   Future<void> _sendCode() async {
     if (_busy || _countdown > 0) return;
     setState(() => _busy = true);
@@ -322,7 +389,16 @@ class _NativeLoginPageState extends State<NativeLoginPage> {
     }
   }
 
-  Future<void> _completeLogin(Uri callbackUri) async {
+  /// 完成登录：把会话 Cookie 装进 WebView，再加载 [callbackUri]。
+  ///
+  /// [weComRedeem] 非空时表示这次回调来自企业微信扫码，SSO 会话 Cookie
+  /// 由 [WeComAuthService.redeem] 单独取得，必须先并入 [_authService]，
+  /// 否则 [AcademicNativeAuthService.installCookiesInWebView] 无 cookie 可装，
+  /// WebView 加载 callbackUri 会被 SSO 重定向回登录页并最终超时。
+  Future<void> _completeLogin(
+    Uri callbackUri, {
+    WeComRedeemResult? weComRedeem,
+  }) async {
     if (kDebugMode && widget.destination == NativeLoginDestination.forum) {
       debugPrint(
         '[FORUM_AUTH_CALLBACK] native redirect '
@@ -330,6 +406,17 @@ class _NativeLoginPageState extends State<NativeLoginPage> {
         'queryKeys=${callbackUri.queryParameters.keys.toList()..sort()} '
         'redirectUri=${_describeRedirectUri(callbackUri.queryParameters['redirect_uri'])} '
         'stateLength=${callbackUri.queryParameters['state']?.length ?? 0}',
+      );
+    }
+    if (weComRedeem != null) {
+      _authService.adoptSessionCookies(
+        weComRedeem.sessionCookies.map(
+          (entry) => (
+            cookie: entry.cookie,
+            domain: entry.domain,
+            path: entry.path,
+          ),
+        ),
       );
     }
     await _authService.installCookiesInWebView();
