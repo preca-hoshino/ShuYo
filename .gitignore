@@ -22,3 +22,5 @@ ios/.symlinks/
 /.DS_Store
 /.demo
 /.plan
+# Widget Preview related
+.widget_preview/
