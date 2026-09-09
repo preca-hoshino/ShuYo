@@ -292,16 +292,14 @@ class ForumImageCache {
     headers?.forEach(request.headers.set);
     final response = await request.close().timeout(HttpTimeout.normal);
     final contentType = response.headers.contentType?.mimeType;
-    final bytes = await response
-        .timeout(HttpTimeout.streamIdle)
-        .fold<BytesBuilder>(
-          BytesBuilder(copy: false),
-          (builder, chunk) {
-            builder.add(chunk);
-            return builder;
-          },
-        )
-        .then((builder) => builder.takeBytes());
+    final bytes =
+        await response.timeout(HttpTimeout.streamIdle).fold<BytesBuilder>(
+      BytesBuilder(copy: false),
+      (builder, chunk) {
+        builder.add(chunk);
+        return builder;
+      },
+    ).then((builder) => builder.takeBytes());
     if (response.statusCode < 200 ||
         response.statusCode >= 300 ||
         bytes.isEmpty) {
