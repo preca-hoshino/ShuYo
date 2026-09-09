@@ -241,14 +241,20 @@ class WeComAuthService {
   /// 长轮询等待用户扫码确认，直到成功、过期或达到超时时间。
   ///
   /// [onStatusChanged] 会在状态变化时回调（用于界面展示）。
+  /// [isCancelled] 返回 true 时提前终止轮询（例如页面被 dispose），
+  /// 避免在后台持续发起网络请求。
   Future<WeComScanResult> waitForScan(
     String key, {
     Duration timeout = const Duration(seconds: 180),
     void Function(WeComScanStatus status)? onStatusChanged,
+    bool Function()? isCancelled,
   }) async {
     final deadline = DateTime.now().add(timeout);
     WeComScanStatus lastStatus = WeComScanStatus.waiting;
     while (DateTime.now().isBefore(deadline)) {
+      if (isCancelled?.call() ?? false) {
+        return WeComScanResult.expired();
+      }
       final result = await _pollOnce(key);
       lastStatus = result.status;
       onStatusChanged?.call(lastStatus);
@@ -498,7 +504,8 @@ class WeComAuthService {
           'type=${error.runtimeType} error=$error');
       rethrow;
     }
-    // 除 redeem 外的响应在这里就把 Set-Cookie 收下，模拟 Session 行为。
+    // 在这里统一收下所有响应（包括 redeem）下发的 Set-Cookie，
+    // 模拟浏览器 Session 行为，共享同一个 Cookie 容器。
     final cookies = _parseCookies(response);
     _debug('response ${uri.host}${uri.path} status=${response.statusCode} '
         'location=${response.headers.value(HttpHeaders.locationHeader) ?? '-'} '

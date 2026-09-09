@@ -33,6 +33,7 @@ class WeComScanPage extends StatefulWidget {
 class _WeComScanPageState extends State<WeComScanPage> {
   WeComScanStatus _status = WeComScanStatus.waiting;
   bool _launchingLink = false;
+  bool _cancelled = false;
 
   @override
   void initState() {
@@ -40,10 +41,18 @@ class _WeComScanPageState extends State<WeComScanPage> {
     unawaited(_waitForScan());
   }
 
+  @override
+  void dispose() {
+    // 页面被销毁时取消后台长轮询，避免在后台继续发起网络请求。
+    _cancelled = true;
+    super.dispose();
+  }
+
   /// 后台长轮询，状态变化时刷新界面，成功后换取目标业务系统回调地址。
   Future<void> _waitForScan() async {
     final result = await widget.authService.waitForScan(
       widget.session.key,
+      isCancelled: () => _cancelled,
       onStatusChanged: (status) {
         if (mounted && status != _status) {
           setState(() => _status = status);
