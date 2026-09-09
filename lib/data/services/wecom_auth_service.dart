@@ -343,7 +343,7 @@ class WeComAuthService {
       );
     }
     final callbackUri = uri.resolve(location);
-    _validateUri(callbackUri);
+    _validateRedirect(callbackUri, target.redirectUri);
     _debug('authorizeTarget ok location=${callbackUri.host}${callbackUri.path} '
         'queryKeys=${callbackUri.queryParameters.keys.toList()..sort()}');
     return callbackUri;
@@ -367,8 +367,18 @@ class WeComAuthService {
   }
 
   /// 向业务系统入口要一个 `state`。
+  ///
+  /// 入口通常不是 SSO 站点（如论坛的 `bbs.shu.edu.cn`），
+  /// 因此 Referer/Origin 要覆盖为该入口自身的 origin，而非固定的 SSO 域，
+  /// 否则可能被目标系统拒绝或行为不一致。
   Future<String> _bootstrapState(Uri uri) async {
-    final response = await _get(uri, host: _RequestHost.sso);
+    final origin = uri.replace(path: '', query: null, fragment: null);
+    final response = await _get(
+      uri,
+      host: _RequestHost.sso,
+      referer: origin.toString(),
+      origin: origin.toString(),
+    );
     final location = response.headers.value(HttpHeaders.locationHeader);
     await response.drain<void>();
     if (location == null || location.isEmpty) return '';
@@ -440,12 +450,14 @@ class WeComAuthService {
   /// 发起请求并按 [host] 选择请求头。
   ///
   /// 默认头指向 SSO 站点，只有企微扫码相关请求才覆盖成企微域的头，
-  /// 否则企微侧可能拒绝。
+  /// 否则企微侧可能拒绝。可通过 [referer]/[origin] 显式覆盖默认来源。
   Future<HttpClientResponse> _get(
     Uri uri, {
     required _RequestHost host,
     String? accept,
     Map<String, String> extraHeaders = const {},
+    String? referer,
+    String? origin,
   }) async {
     final request = await _client.getUrl(uri).timeout(HttpTimeout.connect);
     request.followRedirects = false;
@@ -458,12 +470,18 @@ class WeComAuthService {
     switch (host) {
       case _RequestHost.weCom:
         request.headers
-          ..set(HttpHeaders.refererHeader, WeComConstants.qrConnectBase)
-          ..set('Origin', 'https://${WeComConstants.weComHost}');
+          ..set(
+            HttpHeaders.refererHeader,
+            referer ?? WeComConstants.qrConnectBase,
+          )
+          ..set(
+            'Origin',
+            origin ?? 'https://${WeComConstants.weComHost}',
+          );
       case _RequestHost.sso:
         request.headers
-          ..set(HttpHeaders.refererHeader, WeComConstants.ssoBase)
-          ..set('Origin', WeComConstants.ssoBase);
+          ..set(HttpHeaders.refererHeader, referer ?? WeComConstants.ssoBase)
+          ..set('Origin', origin ?? WeComConstants.ssoBase);
     }
     for (final entry in extraHeaders.entries) {
       request.headers.set(entry.key, entry.value);
@@ -509,11 +527,24 @@ class WeComAuthService {
     return cookies;
   }
 
-  void _validateUri(Uri uri) {
+  /// 校验授权回调地址。
+  ///
+  /// 只允许 [scheme] 为 https 且 host/path 与目标系统的 [expectedRedirect] 一致，
+  /// 防止 SSO 返回任意 https 地址时导航到恶意站点（开放重定向）。
+  void _validateRedirect(Uri uri, String expectedRedirect) {
     if (uri.scheme != 'https' || uri.host.isEmpty) {
       throw const WeComAuthException(
         'unsafeRedirect',
         '企业微信授权返回了不安全的跳转地址',
+      );
+    }
+    final expected = Uri.parse(expectedRedirect);
+    if (uri.host != expected.host || uri.path != expected.path) {
+      _debug('redirect mismatch location=${uri.host}${uri.path} '
+          'expected=${expected.host}${expected.path}');
+      throw const WeComAuthException(
+        'unexpectedRedirect',
+        '企业微信授权返回了未预期的跳转地址',
       );
     }
   }
