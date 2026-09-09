@@ -12,6 +12,10 @@ class HttpTimeout {
   /// A complete ordinary API request, including its response body.
   static const normal = Duration(seconds: 10);
 
+  /// A single WeCom scan long-poll request, which the server keeps open
+  /// (about 40s) until a scan event arrives or it times out.
+  static const longPoll = Duration(seconds: 45);
+
   /// A user-visible operation composed of multiple ordinary requests.
   static const composed = Duration(seconds: 20);
 

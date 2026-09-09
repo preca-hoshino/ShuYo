@@ -8,6 +8,7 @@ void main() {
     expect(HttpTimeout.probe, const Duration(seconds: 3));
     expect(HttpTimeout.connect, const Duration(seconds: 5));
     expect(HttpTimeout.normal, const Duration(seconds: 10));
+    expect(HttpTimeout.longPoll, const Duration(seconds: 45));
     expect(HttpTimeout.composed, const Duration(seconds: 20));
     expect(HttpTimeout.authentication, const Duration(seconds: 30));
     expect(HttpTimeout.webViewPreparation, const Duration(seconds: 15));

@@ -413,6 +413,7 @@ class WeComAuthService {
         accept:
             'text/javascript, application/javascript, application/ecmascript, */*; q=0.01',
         extraHeaders: const {'x-requested-with': 'XMLHttpRequest'},
+        timeout: HttpTimeout.longPoll,
       );
     } on TimeoutException {
       // 长轮询单个请求超时（约 40s）不视为失败，继续下一次轮询。
@@ -420,7 +421,8 @@ class WeComAuthService {
     } on Object {
       return WeComScanResult.waiting();
     }
-    final body = await utf8.decodeStream(response).timeout(HttpTimeout.normal);
+    final body =
+        await utf8.decodeStream(response).timeout(HttpTimeout.longPoll);
     final match = _jsonpPattern.firstMatch(body);
     if (match == null) {
       return WeComScanResult.waiting();
@@ -456,7 +458,8 @@ class WeComAuthService {
   /// 发起请求并按 [host] 选择请求头。
   ///
   /// 默认头指向 SSO 站点，只有企微扫码相关请求才覆盖成企微域的头，
-  /// 否则企微侧可能拒绝。可通过 [referer]/[origin] 显式覆盖默认来源。
+  /// 否则企微侧可能拒绝。可通过 [referer]/[origin] 显式覆盖默认来源，
+  /// 通过 [timeout] 覆盖请求超时（长轮询用 [HttpTimeout.longPoll]）。
   Future<HttpClientResponse> _get(
     Uri uri, {
     required _RequestHost host,
@@ -464,6 +467,7 @@ class WeComAuthService {
     Map<String, String> extraHeaders = const {},
     String? referer,
     String? origin,
+    Duration timeout = HttpTimeout.normal,
   }) async {
     final request = await _client.getUrl(uri).timeout(HttpTimeout.connect);
     request.followRedirects = false;
@@ -498,7 +502,7 @@ class WeComAuthService {
     }
     late final HttpClientResponse response;
     try {
-      response = await request.close().timeout(HttpTimeout.normal);
+      response = await request.close().timeout(timeout);
     } on Object catch (error) {
       _debug('request-failed ${uri.host}${uri.path} '
           'type=${error.runtimeType} error=$error');
