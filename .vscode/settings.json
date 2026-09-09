@@ -1,0 +1,25 @@
+{
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+        "source.fixAll.dart": "explicit"
+    },
+    "editor.wordWrap": "on",
+    "files.exclude": {
+        "**/.dart_tool": true,
+        "**/.packages": true,
+        "**/build": true
+    },
+    "search.exclude": {
+        "**/.dart_tool": true,
+        "**/build": true
+    },
+    "[dart]": {
+        "editor.defaultFormatter": "Dart-Code.dart-code",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.fixAll.dart": "explicit"
+        }
+    },
+    "dart.lineLength": 80,
+    "dart.openDevTools": "never"
+}
