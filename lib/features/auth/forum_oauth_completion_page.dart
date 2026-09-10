@@ -9,6 +9,7 @@ import 'package:webview_flutter_android/webview_flutter_android.dart';
 import '../../core/certificate_policy.dart';
 import '../../core/client_user_agent.dart';
 import '../../core/forum_url_resolver.dart';
+import '../../data/services/campus_reachability_service.dart';
 import '../../data/services/discourse_api_client.dart';
 import '../../data/services/forum_auth_service.dart';
 import '../../data/services/http_timeout.dart';
@@ -81,6 +82,8 @@ class _ForumOAuthCompletionPageState extends State<ForumOAuthCompletionPage> {
   int _certificateErrorGeneration = 0;
   final String _status = '正在建立乐乎论坛会话';
 
+  static const _reachabilityService = CampusReachabilityService();
+
   @override
   void initState() {
     super.initState();
@@ -124,7 +127,9 @@ class _ForumOAuthCompletionPageState extends State<ForumOAuthCompletionPage> {
               _deferCertificateError(error.description);
               return;
             }
-            _fail('论坛登录会话建立失败：${error.description}');
+            unawaited(
+              _failWithNetworkHint('论坛登录会话建立失败：${error.description}'),
+            );
           },
         ),
       );
@@ -464,7 +469,9 @@ class _ForumOAuthCompletionPageState extends State<ForumOAuthCompletionPage> {
     _timeoutTimer?.cancel();
     _timeoutTimer = Timer(
       HttpTimeout.oauthCompletion,
-      () => _fail('建立乐乎论坛登录会话超时，请返回后重新登录'),
+      () => unawaited(
+        _failWithNetworkHint('建立乐乎论坛登录会话超时，请返回后重新登录'),
+      ),
     );
   }
 
@@ -487,6 +494,23 @@ class _ForumOAuthCompletionPageState extends State<ForumOAuthCompletionPage> {
     _sessionPollTimer?.cancel();
     _timeoutTimer?.cancel();
     Navigator.of(context).pop(result);
+  }
+
+  /// 报错前先确认是否为校园网环境问题。
+  ///
+  /// 非校园网下论坛完全不可达：WebView 可能一直挂到超时（静默丢包），
+  /// 也可能只给出「net::ERR_NAME_NOT_RESOLVED」之类的底层描述。
+  /// 先探测一次论坛直连可达性，才能给出可操作的提示。
+  Future<void> _failWithNetworkHint(String fallback) async {
+    if (_completed || !mounted || _error != null) return;
+    final unreachable = await _isForumDirectUnreachable();
+    _fail(unreachable ? campusNetworkRequiredMessage : fallback);
+  }
+
+  Future<bool> _isForumDirectUnreachable() async {
+    if (ForumUrlResolver.usesWebVpn) return false;
+    final result = await _reachabilityService.checkDirectForum();
+    return result.isUnreachable;
   }
 
   void _fail(String message) {
