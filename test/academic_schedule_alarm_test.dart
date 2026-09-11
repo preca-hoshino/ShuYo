@@ -24,8 +24,7 @@ void main() {
 
   setUp(() {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-    FlutterLocalNotificationsPlatform.instance =
-        _StubNotificationsPlatform();
+    FlutterLocalNotificationsPlatform.instance = _StubNotificationsPlatform();
     SharedPreferences.setMockInitialValues({});
     syncedAlarms = [];
     methodCalls = [];

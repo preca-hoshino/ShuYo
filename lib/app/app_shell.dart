@@ -1133,6 +1133,14 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     }
     try {
       await _scheduleRepository.refreshSchedule();
+      // 同步成功后，教务返回的学期数据包含学号。企微扫码登录不经过学号
+      // 输入框，这里补上，避免下次启动误报「未登录」。
+      final cachedSchedule = await _scheduleRepository.loadCachedSchedule();
+      final studentId = cachedSchedule?.term.studentId ?? '';
+      if (studentId.isNotEmpty) {
+        await AcademicAccountStore().saveStudentId(studentId);
+        await _loadAcademicStudentId();
+      }
       final summary = await _scheduleRepository.homeSummary();
       unawaited(_scheduleWidgetService.syncFromCache());
       if (!mounted) {

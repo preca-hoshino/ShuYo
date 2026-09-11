@@ -92,7 +92,7 @@ class AcademicNativeAuthService {
   final _NativeAuthTarget _target;
   final WebViewCookieManager _cookieManager;
   final HttpClient _client;
-  final List<_StoredCookie> _cookies = [];
+  final AcademicSessionCookieStore _cookieStore = AcademicSessionCookieStore();
   bool _webViewCookiesImported = false;
 
   Uri? _loginUri;
@@ -101,6 +101,30 @@ class AcademicNativeAuthService {
   String? _encryptedPassword;
 
   void dispose() => _client.close(force: true);
+
+  /// 把外部登录流程（如企业微信扫码）取得的会话 Cookie 并入本次认证会话。
+  ///
+  /// 企业微信扫码走的是独立的 `WeComAuthService`，不会经过本类的
+  /// [login] 流程，因此 [_cookieStore] 是空的。必须在
+  /// [installCookiesInWebView] 之前把外部流程收集到的 Cookie 交给本类，
+  /// 否则 WebView 加载 callbackUri 时会因缺少会话而被重定向回登录页。
+  void adoptSessionCookies(
+    Iterable<({Cookie cookie, String domain, String path})> cookies,
+  ) {
+    for (final entry in cookies) {
+      if (entry.cookie.name.isEmpty || entry.cookie.value.isEmpty) continue;
+      final scoped = Cookie(entry.cookie.name, entry.cookie.value)
+        ..domain = entry.domain
+        ..path = entry.path;
+      _cookieStore.save(Uri.parse('https://${entry.domain}'), [scoped]);
+    }
+    if (kDebugMode) {
+      debugPrint(
+        '[SHU_AUTH] adopted session cookies '
+        'names=${cookies.map((entry) => entry.cookie.name).toList()..sort()}',
+      );
+    }
+  }
 
   /// Transfers the native authentication cookies to the shared WebView store
   /// before the OAuth callback is loaded there.
@@ -114,7 +138,7 @@ class AcademicNativeAuthService {
     }
     final domains = <String>{};
     final expectedByDomain = <String, Map<String, String>>{};
-    for (final stored in _cookies) {
+    for (final stored in _cookieStore.entries) {
       final cookie = stored.cookie;
       if (cookie.value.isEmpty) continue;
       domains.add(stored.domain);
@@ -690,34 +714,10 @@ class AcademicNativeAuthService {
   }
 
   void _saveCookies(Uri source, List<Cookie> cookies) {
-    for (final cookie in cookies) {
-      final domain =
-          (cookie.domain?.isNotEmpty == true ? cookie.domain! : source.host)
-              .replaceFirst(RegExp(r'^\.'), '');
-      final path = cookie.path?.isNotEmpty == true ? cookie.path! : '/';
-      _cookies.removeWhere(
-        (stored) =>
-            stored.cookie.name == cookie.name &&
-            stored.domain == domain &&
-            stored.path == path,
-      );
-      if (cookie.value.isNotEmpty &&
-          (cookie.expires == null || cookie.expires!.isAfter(DateTime.now()))) {
-        _cookies.add(_StoredCookie(cookie, domain, path));
-      }
-    }
+    _cookieStore.save(source, cookies);
   }
 
-  String _cookieHeader(Uri uri) {
-    final now = DateTime.now();
-    _cookies.removeWhere(
-      (stored) => stored.cookie.expires?.isBefore(now) == true,
-    );
-    return _cookies
-        .where((stored) => stored.matches(uri))
-        .map((stored) => '${stored.cookie.name}=${stored.cookie.value}')
-        .join('; ');
-  }
+  String _cookieHeader(Uri uri) => _cookieStore.headerFor(uri);
 
   String _normalizeCookieDomain(String value, String fallbackHost) {
     if (value.isEmpty) return fallbackHost;
@@ -834,6 +834,57 @@ class _StoredCookie {
 
   bool matches(Uri uri) {
     final hostMatches = uri.host == domain || uri.host.endsWith('.$domain');
-    return hostMatches && uri.path.startsWith(path);
+    // Uri.path 对 "https://host" 形式返回空串，但 HTTP 语义上等价于 "/"。
+    final requestPath = uri.path.isEmpty ? '/' : uri.path;
+    return hostMatches && requestPath.startsWith(path);
   }
+}
+
+/// 认证流程在内存中维护的 Cookie 容器。
+///
+/// 抽成独立类是为了让「企业微信扫码取得的 SSO 会话 Cookie 是否正确并入
+/// 后续请求」这一行为可以脱离 WebView 平台单独测试
+/// （[AcademicNativeAuthService] 的构造函数会创建 [WebViewCookieManager]，
+/// 在纯 Dart 单元测试中不可用）。
+class AcademicSessionCookieStore {
+  final List<_StoredCookie> _cookies = [];
+
+  /// 并入一批 Cookie。空值、已过期的 Cookie 会被丢弃；
+  /// 同名同域同路径的旧 Cookie 会被覆盖。
+  void save(Uri source, Iterable<Cookie> cookies) {
+    for (final cookie in cookies) {
+      final domain =
+          (cookie.domain?.isNotEmpty == true ? cookie.domain! : source.host)
+              .replaceFirst(RegExp(r'^\.'), '');
+      final path = cookie.path?.isNotEmpty == true ? cookie.path! : '/';
+      _cookies.removeWhere(
+        (stored) =>
+            stored.cookie.name == cookie.name &&
+            stored.domain == domain &&
+            stored.path == path,
+      );
+      if (cookie.value.isNotEmpty &&
+          (cookie.expires == null || cookie.expires!.isAfter(DateTime.now()))) {
+        _cookies.add(_StoredCookie(cookie, domain, path));
+      }
+    }
+  }
+
+  /// 构造适用于 [uri] 的 `Cookie` 请求头，顺带清理已过期的条目。
+  String headerFor(Uri uri) {
+    final now = DateTime.now();
+    _cookies.removeWhere(
+      (stored) => stored.cookie.expires?.isBefore(now) == true,
+    );
+    return _cookies
+        .where((stored) => stored.matches(uri))
+        .map((stored) => '${stored.cookie.name}=${stored.cookie.value}')
+        .join('; ');
+  }
+
+  /// 当前持有的 Cookie 快照，供安装进 WebView 时使用。
+  List<({Cookie cookie, String domain, String path})> get entries => [
+        for (final stored in _cookies)
+          (cookie: stored.cookie, domain: stored.domain, path: stored.path),
+      ];
 }
