@@ -22,6 +22,7 @@ void main() {
     final service = AppDataMigrationService(
       webViewCookieClearer: () async => cookieClearCount++,
       cacheDirectoryLoader: () async => root,
+      platformStateClearer: () async {},
     );
 
     await service.migrateIfNeeded();
@@ -29,7 +30,8 @@ void main() {
     expect(prefs.getString('academic.auth.cached_cookies.webvpn'), isNull);
     expect(prefs.getString('forum.account.snapshot.v1.webvpn'), isNull);
     expect(prefs.getBool('client.onboarding.startup.completed'), isFalse);
-    expect(prefs.getBool('client.network.webvpn.auto_proxy'), isTrue);
+    expect(prefs.getBool('client.network.webvpn.auto_proxy'), isNull);
+    expect(prefs.getBool('client.network.webvpn.enabled'), isFalse);
     expect(prefs.getInt(AppDataMigrationService.schemaVersionKey),
         AppDataMigrationService.currentSchemaVersion);
     expect(await imageDir.exists(), isFalse);
@@ -44,6 +46,7 @@ void main() {
     final service = AppDataMigrationService(
       webViewCookieClearer: () async => throw StateError('cookie failure'),
       cacheDirectoryLoader: () async => Directory.systemTemp,
+      platformStateClearer: () async {},
     );
 
     await expectLater(service.migrateIfNeeded(), throwsStateError);

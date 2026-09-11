@@ -18,16 +18,16 @@ class ClientNotificationSettings {
 
 class ClientNetworkSettings {
   const ClientNetworkSettings({
-    required this.autoUseWebVpnProxy,
+    required this.webVpnEnabled,
   });
 
-  final bool autoUseWebVpnProxy;
+  final bool webVpnEnabled;
 
   ClientNetworkSettings copyWith({
-    bool? autoUseWebVpnProxy,
+    bool? webVpnEnabled,
   }) {
     return ClientNetworkSettings(
-      autoUseWebVpnProxy: autoUseWebVpnProxy ?? this.autoUseWebVpnProxy,
+      webVpnEnabled: webVpnEnabled ?? this.webVpnEnabled,
     );
   }
 }
@@ -39,7 +39,7 @@ class ClientSettingsService {
 
   static const scheduleNotificationsEnabledKey =
       'client.notifications.schedule.enabled';
-  static const autoUseWebVpnProxyKey = 'client.network.webvpn.auto_proxy';
+  static const webVpnEnabledKey = 'client.network.webvpn.enabled';
   static const startupOnboardingCompletedKey =
       'client.onboarding.startup.completed';
   static const themeIdKey = 'client.theme.id';
@@ -70,7 +70,7 @@ class ClientSettingsService {
   Future<ClientNetworkSettings> loadNetworkSettings() async {
     final prefs = await _preferencesLoader();
     return ClientNetworkSettings(
-      autoUseWebVpnProxy: prefs.getBool(autoUseWebVpnProxyKey) ?? true,
+      webVpnEnabled: prefs.getBool(webVpnEnabledKey) ?? false,
     );
   }
 
@@ -79,8 +79,8 @@ class ClientSettingsService {
   ) async {
     final prefs = await _preferencesLoader();
     await prefs.setBool(
-      autoUseWebVpnProxyKey,
-      settings.autoUseWebVpnProxy,
+      webVpnEnabledKey,
+      settings.webVpnEnabled,
     );
     return settings;
   }

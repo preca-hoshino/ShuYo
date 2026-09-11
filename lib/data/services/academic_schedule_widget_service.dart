@@ -14,6 +14,8 @@ class AcademicScheduleWidgetService {
       : _repository = repository;
 
   static const snapshotKey = 'academic_schedule_widget_snapshot';
+  static const iosAppGroupId = 'group.work.shuyo.app';
+  static const iosWidgetKind = 'ScheduleWidget';
   static const _androidWidgetNames = [
     'ScheduleWidgetSmallProvider',
     'ScheduleWidgetProvider',
@@ -23,7 +25,7 @@ class AcademicScheduleWidgetService {
   final AcademicScheduleRepository _repository;
 
   Future<void> syncFromCache({DateTime? now}) async {
-    if (!_supportsAndroidWidget) {
+    if (!_supportsHomeWidget) {
       return;
     }
     try {
@@ -40,7 +42,7 @@ class AcademicScheduleWidgetService {
     required ScheduleWeekState? weekState,
     DateTime? now,
   }) async {
-    if (!_supportsAndroidWidget) {
+    if (!_supportsHomeWidget) {
       return;
     }
     final snapshot = buildSnapshot(
@@ -52,18 +54,23 @@ class AcademicScheduleWidgetService {
       await HomeWidget.saveWidgetData<String>(
         snapshotKey,
         jsonEncode(snapshot),
+        appGroupId: Platform.isIOS ? iosAppGroupId : null,
       );
-      for (final widgetName in _androidWidgetNames) {
-        await HomeWidget.updateWidget(
-          name: widgetName,
-          androidName: widgetName,
-          qualifiedAndroidName: 'work.shuyo.app.$widgetName',
-        );
+      if (Platform.isIOS) {
+        await HomeWidget.updateWidget(iOSName: iosWidgetKind);
+      } else {
+        for (final widgetName in _androidWidgetNames) {
+          await HomeWidget.updateWidget(
+            name: widgetName,
+            androidName: widgetName,
+            qualifiedAndroidName: 'work.shuyo.app.$widgetName',
+          );
+        }
       }
     } on MissingPluginException {
-      // 测试环境或非 Android 运行时可能没有插件注册。
+      // 测试环境或不支持桌面小组件的运行时可能没有插件注册。
     } on PlatformException {
-      // 桌面小组件刷新失败时保留 App 内行为。
+      // 系统小组件刷新失败时保留 App 内行为。
     } on Object {
       // 不让厂商桌面兼容问题影响主流程。
     }
@@ -176,11 +183,11 @@ class AcademicScheduleWidgetService {
     return (state.currentWeek + offset).clamp(0, schedule.vacationWeek);
   }
 
-  static bool get _supportsAndroidWidget {
+  static bool get _supportsHomeWidget {
     if (kIsWeb) {
       return false;
     }
-    return Platform.isAndroid;
+    return Platform.isAndroid || Platform.isIOS;
   }
 
   static final _sampleDay = DateTime(2000);

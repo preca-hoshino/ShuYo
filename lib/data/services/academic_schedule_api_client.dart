@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 
@@ -65,13 +66,37 @@ class AcademicScheduleApiClient {
     return IOClient(HttpClient());
   }
 
-  Future<AcademicSchedule> fetchCurrentSchedule() async {
-    final term = await fetchCurrentTermQuery();
-    if (!term.isValid) {
-      throw const AcademicApiException('未能识别当前学期');
+  Future<AcademicSchedule> fetchCurrentSchedule() {
+    return HttpTimeout.request(
+      _fetchCurrentSchedule(),
+      timeout: HttpTimeout.composed,
+      message: '课表同步超时，请稍后再试',
+    );
+  }
+
+  Future<AcademicSchedule> _fetchCurrentSchedule() async {
+    _debug(
+        'sync start mode=${AcademicUrlResolver.usesWebVpn ? 'webvpn' : 'direct'}');
+    try {
+      final term = await fetchCurrentTermQuery();
+      if (!term.isValid) {
+        throw const AcademicApiException('未能识别当前学期');
+      }
+      _debug('term resolved year=${term.yearCode} term=${term.termCode}');
+      final json = await fetchScheduleJson(term);
+      final schedule = AcademicScheduleParser.parse(json);
+      _debug('sync success');
+      return schedule;
+    } on Object catch (error, stackTrace) {
+      if (kDebugMode) {
+        debugPrint('[SHU_SCHEDULE_API] sync failed: $error');
+        debugPrintStack(
+          label: '[SHU_SCHEDULE_API] stack',
+          stackTrace: stackTrace,
+        );
+      }
+      rethrow;
     }
-    final json = await fetchScheduleJson(term);
-    return AcademicScheduleParser.parse(json);
   }
 
   Future<AcademicTermQuery> fetchCurrentTermQuery() async {
@@ -82,6 +107,7 @@ class AcademicScheduleApiClient {
       ),
       message: '教务系统请求超时，请稍后再试',
     );
+    _debugResponse('schedule-index', response);
     _ensureSuccess(response);
     final html = response.body;
     _ensureNotLoginPage(html);
@@ -125,6 +151,7 @@ class AcademicScheduleApiClient {
       ),
       message: '教务系统请求超时，请稍后再试',
     );
+    _debugResponse('schedule-data', response);
     _ensureSuccess(response);
     _ensureNotLoginPage(response.body);
     final decoded = jsonDecode(response.body);
@@ -145,8 +172,17 @@ class AcademicScheduleApiClient {
       targetUri: _uri(AcademicConstants.scheduleIndexPath),
     );
     if (cookie == null || cookie.isEmpty) {
+      _debug('cookie header unavailable');
       throw const AcademicAuthException('未读取到教务系统 Cookie，请先打开教务系统并确认已登录');
     }
+    final cookieNames = cookie
+        .split(';')
+        .map((part) => part.trim().split('=').first)
+        .where((name) => name.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+    _debug('request cookies=$cookieNames');
     return {
       'accept': accept,
       'cookie': cookie,
@@ -175,14 +211,56 @@ class AcademicScheduleApiClient {
   }
 
   void _ensureNotLoginPage(String body) {
-    final lower = body.toLowerCase();
-    if (lower.contains('/oauth2/login') ||
-        lower.contains('newsso.shu.edu.cn') ||
-        lower.contains('jwglxt/xtgl/login_slogin') ||
-        lower.contains('name="yhm"') ||
-        lower.contains("name='yhm'")) {
+    if (_loginPageSignals(body).isNotEmpty) {
       throw const AcademicAuthException('教务登录已失效，请重新登录');
     }
+  }
+
+  void _debugResponse(String requestName, http.Response response) {
+    if (!kDebugMode) return;
+    final requestUri = response.request?.url;
+    final title = RegExp(
+      r'<title[^>]*>([\s\S]*?)</title>',
+      caseSensitive: false,
+    )
+        .firstMatch(response.body)
+        ?.group(1)
+        ?.replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    final safeTitle =
+        title == null ? '-' : title.substring(0, title.length.clamp(0, 80));
+    final contentType = response.headers['content-type'] ?? '-';
+    final signals = _loginPageSignals(response.body);
+    _debug(
+      'response request=$requestName '
+      'uri=${requestUri == null ? '-' : _describeUri(requestUri)} '
+      'status=${response.statusCode} contentType=$contentType '
+      'bytes=${response.bodyBytes.length} title="$safeTitle" '
+      'loginSignals=$signals',
+    );
+  }
+
+  List<String> _loginPageSignals(String body) {
+    final lower = body.toLowerCase();
+    return <(String, String)>[
+      ('oauth2-login', '/oauth2/login'),
+      ('newsso-host', 'newsso.shu.edu.cn'),
+      ('legacy-login', 'jwglxt/xtgl/login_slogin'),
+      ('username-double-quote', 'name="yhm"'),
+      ('username-single-quote', "name='yhm'"),
+    ]
+        .where((entry) => lower.contains(entry.$2))
+        .map((entry) => entry.$1)
+        .toList();
+  }
+
+  String _describeUri(Uri uri) {
+    final keys = uri.queryParameters.keys.toList()..sort();
+    return '${uri.host}${uri.path}${keys.isEmpty ? '' : ' queryKeys=$keys'}';
+  }
+
+  void _debug(String message) {
+    if (kDebugMode) debugPrint('[SHU_SCHEDULE_API] $message');
   }
 
   String? _selectedOptionValue(String html, String selectId) {

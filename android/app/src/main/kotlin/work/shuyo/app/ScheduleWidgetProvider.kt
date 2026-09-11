@@ -3,11 +3,11 @@ package work.shuyo.app
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
 import android.content.Context
-import android.content.Intent
 import android.content.SharedPreferences
-import android.os.Build
+import android.net.Uri
 import android.view.View
 import android.widget.RemoteViews
+import es.antonborri.home_widget.HomeWidgetLaunchIntent
 import es.antonborri.home_widget.HomeWidgetProvider
 import org.json.JSONObject
 import java.time.LocalDate
@@ -86,6 +86,21 @@ abstract class ScheduleWidgetBaseProvider(
         val nowMinute = now.hour * 60 + now.minute
         val upcoming = todayCourses.firstOrNull { it.endMinute >= nowMinute }
 
+        val tomorrow = today.plusDays(1)
+        val tomorrowWeek = schedule.activeWeek(tomorrow)
+        val tomorrowCourses = if (
+            upcoming == null && tomorrowWeek in 1..schedule.maxWeek
+        ) {
+            schedule.courses
+                .filter { course ->
+                    course.weekday == tomorrow.dayOfWeek.value &&
+                        course.occursInWeek(tomorrowWeek)
+                }
+                .sortedWith(compareBy<WidgetCourse> { it.startMinute }.thenBy { it.name })
+        } else {
+            emptyList()
+        }
+
         if (compact) {
             bindCompact(
                 views,
@@ -93,16 +108,29 @@ abstract class ScheduleWidgetBaseProvider(
                 today.dayOfWeek.value,
                 todayCourses,
                 upcoming,
+                tomorrowCourses.firstOrNull(),
+                tomorrowWeek,
+                tomorrow.dayOfWeek.value,
                 nowMinute,
                 isVacation
             )
             return views
         }
 
-        val visibleCourses = todayCourses
-            .filter { it.endMinute >= nowMinute }
-            .ifEmpty { todayCourses.takeLast(rowBindings.size) }
-            .take(rowBindings.size)
+        val showingTomorrow = tomorrowCourses.isNotEmpty()
+        val visibleCourses = if (showingTomorrow) {
+            tomorrowCourses.take(rowBindings.size)
+        } else {
+            todayCourses
+                .filter { it.endMinute >= nowMinute }
+                .take(rowBindings.size)
+        }
+        val displayWeek = if (showingTomorrow) tomorrowWeek else activeWeek
+        val displayWeekday = if (showingTomorrow) {
+            tomorrow.dayOfWeek.value
+        } else {
+            today.dayOfWeek.value
+        }
 
         views.setTextViewText(
             R.id.widget_title,
@@ -110,18 +138,31 @@ abstract class ScheduleWidgetBaseProvider(
         )
         views.setTextViewText(
             R.id.widget_meta,
-            if (isVacation) {
+            if (showingTomorrow) {
+                "第${displayWeek}周 · ${weekdayName(displayWeekday)}"
+            } else if (isVacation) {
                 "假期中 · ${weekdayName(today.dayOfWeek.value)}"
             } else {
-                "第${activeWeek}周 · ${weekdayName(today.dayOfWeek.value)}"
+                "第${displayWeek}周 · ${weekdayName(displayWeekday)}"
             }
         )
         views.setTextViewText(
             R.id.widget_status,
-            if (isVacation) "假期中" else statusText(todayCourses, upcoming, nowMinute)
+            if (showingTomorrow) {
+                "明天的课程"
+            } else if (isVacation) {
+                "假期中"
+            } else {
+                statusText(todayCourses, upcoming, nowMinute)
+            }
         )
         rowBindings.forEachIndexed { index, binding ->
-            bindCourseRow(views, binding, visibleCourses.getOrNull(index), nowMinute)
+            bindCourseRow(
+                views,
+                binding,
+                visibleCourses.getOrNull(index),
+                if (showingTomorrow) -1 else nowMinute
+            )
         }
         return views
     }
@@ -144,28 +185,41 @@ abstract class ScheduleWidgetBaseProvider(
         weekday: Int,
         todayCourses: List<WidgetCourse>,
         upcoming: WidgetCourse?,
+        tomorrowCourse: WidgetCourse?,
+        tomorrowWeek: Int,
+        tomorrowWeekday: Int,
         nowMinute: Int,
         isVacation: Boolean
     ) {
+        val showingTomorrow = tomorrowCourse != null
         views.setTextViewText(R.id.widget_title, "课表")
         views.setTextViewText(
             R.id.widget_meta,
-            if (isVacation) "假期中 · ${weekdayName(weekday)}"
+            if (showingTomorrow) "第${tomorrowWeek}周 · ${weekdayName(tomorrowWeekday)}"
+            else if (isVacation) "假期中 · ${weekdayName(weekday)}"
             else "第${activeWeek}周 · ${weekdayName(weekday)}"
         )
+        views.setTextViewText(R.id.compact_course_meta, "")
+        if (tomorrowCourse != null) {
+            val place = tomorrowCourse.room.ifBlank { tomorrowCourse.sectionText }
+            views.setTextViewText(R.id.widget_status, tomorrowCourse.name)
+            views.setTextViewText(
+                R.id.compact_course_meta,
+                if (place.isBlank()) "明天 ${tomorrowCourse.startText}"
+                else "明天 ${tomorrowCourse.startText} · $place"
+            )
+            return
+        }
         if (isVacation) {
             views.setTextViewText(R.id.widget_status, "假期中")
-            views.setTextViewText(R.id.compact_course_meta, "点按打开 ShuYo")
             return
         }
         if (todayCourses.isEmpty()) {
             views.setTextViewText(R.id.widget_status, "今日暂无课程")
-            views.setTextViewText(R.id.compact_course_meta, "点按打开 ShuYo")
             return
         }
         if (upcoming == null) {
             views.setTextViewText(R.id.widget_status, "今日课程已结束")
-            views.setTextViewText(R.id.compact_course_meta, "点按打开 ShuYo")
             return
         }
         val prefix = if (upcoming.isActive(nowMinute)) "正在上课" else "下一节 ${upcoming.startText}"
@@ -226,19 +280,11 @@ abstract class ScheduleWidgetBaseProvider(
     }
 
     private fun launchIntent(context: Context): PendingIntent {
-        val intent = Intent(context, MainActivity::class.java).apply {
-            action = Intent.ACTION_MAIN
-            addCategory(Intent.CATEGORY_LAUNCHER)
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra("openSchedule", true)
-        }
-        val flags = PendingIntent.FLAG_UPDATE_CURRENT or
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                PendingIntent.FLAG_IMMUTABLE
-            } else {
-                0
-            }
-        return PendingIntent.getActivity(context, 9201, intent, flags)
+        return HomeWidgetLaunchIntent.getActivity(
+            context,
+            MainActivity::class.java,
+            Uri.parse("shuyo://schedule")
+        )
     }
 
     private fun weekdayName(weekday: Int): String {

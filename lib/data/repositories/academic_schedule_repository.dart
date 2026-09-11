@@ -13,12 +13,25 @@ class ScheduleWeekState {
 
   final int currentWeek;
   final DateTime anchorMonday;
+
+  DateTime get firstWeekStart =>
+      anchorMonday.subtract(Duration(days: (currentWeek - 1) * 7));
 }
 
 class ScheduleHomeSummary {
   const ScheduleHomeSummary(this.text);
 
   final String text;
+}
+
+class AcademicScheduleCacheState {
+  const AcademicScheduleCacheState({
+    required this.schedule,
+    required this.weekState,
+  });
+
+  final AcademicSchedule? schedule;
+  final ScheduleWeekState weekState;
 }
 
 class AcademicScheduleRepository {
@@ -46,6 +59,15 @@ class AcademicScheduleRepository {
       return null;
     }
     return AcademicSchedule.fromJson(decoded);
+  }
+
+  Future<AcademicScheduleCacheState> loadCachedState({DateTime? now}) async {
+    final scheduleFuture = loadCachedSchedule();
+    final weekStateFuture = loadWeekState(now: now);
+    return AcademicScheduleCacheState(
+      schedule: await scheduleFuture,
+      weekState: await weekStateFuture,
+    );
   }
 
   Future<AcademicSchedule> refreshSchedule() async {
@@ -82,6 +104,15 @@ class AcademicScheduleRepository {
     await prefs.setString(
       _anchorMondayKey,
       startOfWeek(now ?? DateTime.now()).toIso8601String(),
+    );
+  }
+
+  Future<void> setFirstWeekStart(DateTime date) async {
+    final prefs = await _preferencesLoader();
+    await prefs.setInt(_anchorWeekKey, 1);
+    await prefs.setString(
+      _anchorMondayKey,
+      startOfWeek(date).toIso8601String(),
     );
   }
 

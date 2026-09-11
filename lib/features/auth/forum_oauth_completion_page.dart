@@ -9,16 +9,17 @@ import 'package:webview_flutter_android/webview_flutter_android.dart';
 import '../../core/certificate_policy.dart';
 import '../../core/client_user_agent.dart';
 import '../../core/forum_url_resolver.dart';
+import '../../data/services/campus_reachability_service.dart';
 import '../../data/services/discourse_api_client.dart';
 import '../../data/services/forum_auth_service.dart';
+import '../../data/services/http_timeout.dart';
 
 enum ForumOAuthCompletionResult { loggedIn }
 
 @visibleForTesting
 bool isForumRegistrationUri(Uri uri) {
-  if (!ForumUrlResolver.usesWebVpn ||
-      uri.scheme != 'https' ||
-      uri.host.toLowerCase() != ForumUrlResolver.webVpnHost) {
+  if (uri.scheme != 'https' ||
+      !ForumUrlResolver.isActiveForumHost(uri.host.toLowerCase())) {
     return false;
   }
   return uri.path == '/login';
@@ -26,9 +27,8 @@ bool isForumRegistrationUri(Uri uri) {
 
 @visibleForTesting
 bool isForumRegistrationCompletionUri(Uri uri) {
-  if (!ForumUrlResolver.usesWebVpn ||
-      uri.scheme != 'https' ||
-      uri.host.toLowerCase() != ForumUrlResolver.webVpnHost) {
+  if (uri.scheme != 'https' ||
+      !ForumUrlResolver.isActiveForumHost(uri.host.toLowerCase())) {
     return false;
   }
   final path = uri.path.toLowerCase();
@@ -36,9 +36,8 @@ bool isForumRegistrationCompletionUri(Uri uri) {
 }
 
 bool _isForumRegistrationFlowUri(Uri uri) {
-  if (!ForumUrlResolver.usesWebVpn ||
-      uri.scheme != 'https' ||
-      uri.host.toLowerCase() != ForumUrlResolver.webVpnHost) {
+  if (uri.scheme != 'https' ||
+      !ForumUrlResolver.isActiveForumHost(uri.host.toLowerCase())) {
     return false;
   }
   final path = uri.path.toLowerCase();
@@ -83,6 +82,8 @@ class _ForumOAuthCompletionPageState extends State<ForumOAuthCompletionPage> {
   int _certificateErrorGeneration = 0;
   final String _status = '正在建立乐乎论坛会话';
 
+  static const _reachabilityService = CampusReachabilityService();
+
   @override
   void initState() {
     super.initState();
@@ -126,7 +127,9 @@ class _ForumOAuthCompletionPageState extends State<ForumOAuthCompletionPage> {
               _deferCertificateError(error.description);
               return;
             }
-            _fail('论坛登录会话建立失败：${error.description}');
+            unawaited(
+              _failWithNetworkHint('论坛登录会话建立失败：${error.description}'),
+            );
           },
         ),
       );
@@ -229,10 +232,7 @@ class _ForumOAuthCompletionPageState extends State<ForumOAuthCompletionPage> {
       const Duration(milliseconds: 800),
       (_) => unawaited(_checkSession()),
     );
-    _timeoutTimer = Timer(
-      const Duration(seconds: 75),
-      () => _fail('建立乐乎论坛登录会话超时，请返回后重新登录'),
-    );
+    _armCompletionTimeout();
   }
 
   Future<void> _configureAndroidWebView() async {
@@ -261,11 +261,16 @@ class _ForumOAuthCompletionPageState extends State<ForumOAuthCompletionPage> {
     }
     if (_isForumRegistrationFlowUri(uri)) {
       if (!_registrationActive && mounted) {
+        _timeoutTimer?.cancel();
+        _timeoutTimer = null;
         setState(() => _registrationActive = true);
       }
     }
     if (_registrationActive && isForumRegistrationCompletionUri(uri)) {
-      _registrationCompletionReached = true;
+      if (!_registrationCompletionReached) {
+        _registrationCompletionReached = true;
+        _armCompletionTimeout();
+      }
       if (kDebugMode) {
         debugPrint(
           '[FORUM_AUTH_CALLBACK] registration-complete-candidate '
@@ -460,6 +465,16 @@ class _ForumOAuthCompletionPageState extends State<ForumOAuthCompletionPage> {
     unawaited(_completeWebViewSession());
   }
 
+  void _armCompletionTimeout() {
+    _timeoutTimer?.cancel();
+    _timeoutTimer = Timer(
+      HttpTimeout.oauthCompletion,
+      () => unawaited(
+        _failWithNetworkHint('建立乐乎论坛登录会话超时，请返回后重新登录'),
+      ),
+    );
+  }
+
   Future<void> _completeWebViewSession() async {
     try {
       await _authService.refreshFromWebView();
@@ -479,6 +494,23 @@ class _ForumOAuthCompletionPageState extends State<ForumOAuthCompletionPage> {
     _sessionPollTimer?.cancel();
     _timeoutTimer?.cancel();
     Navigator.of(context).pop(result);
+  }
+
+  /// 报错前先确认是否为校园网环境问题。
+  ///
+  /// 非校园网下论坛完全不可达：WebView 可能一直挂到超时（静默丢包），
+  /// 也可能只给出「net::ERR_NAME_NOT_RESOLVED」之类的底层描述。
+  /// 先探测一次论坛直连可达性，才能给出可操作的提示。
+  Future<void> _failWithNetworkHint(String fallback) async {
+    if (_completed || !mounted || _error != null) return;
+    final unreachable = await _isForumDirectUnreachable();
+    _fail(unreachable ? campusNetworkRequiredMessage : fallback);
+  }
+
+  Future<bool> _isForumDirectUnreachable() async {
+    if (ForumUrlResolver.usesWebVpn) return false;
+    final result = await _reachabilityService.checkDirectForum();
+    return result.isUnreachable;
   }
 
   void _fail(String message) {

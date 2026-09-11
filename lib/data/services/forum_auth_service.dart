@@ -140,28 +140,9 @@ class ForumAuthService {
   }
 
   Future<void> clearCookies() async {
-    for (final domain in [
-      Uri.parse('https://${ForumUrlResolver.webVpnHost}'),
-      Uri.parse('https://bbs.shu.edu.cn'),
-    ]) {
-      List<WebViewCookie> cookies;
-      try {
-        cookies = await _cookieLoader(domain);
-      } on Object {
-        continue;
-      }
-      for (final cookie in cookies) {
-        await _cookieSetter(
-          WebViewCookie(
-            name: cookie.name,
-            value: '',
-            domain: _normalizeCookieDomain(cookie.domain, domain.host),
-            path: cookie.path,
-          ),
-        );
-      }
+    for (final mode in ForumAccessMode.values) {
+      await clearCookiesForMode(mode);
     }
-    await clearCachedCookies();
   }
 
   Future<List<_StoredForumCookie>> _loadAndMergeCookies(
@@ -367,6 +348,34 @@ class ForumAuthService {
 }
 
 extension ForumAuthCookieMaintenance on ForumAuthService {
+  Future<void> clearCookiesForMode(ForumAccessMode mode) async {
+    final domain = Uri.parse(
+      mode == ForumAccessMode.webVpn
+          ? 'https://${ForumUrlResolver.webVpnHost}'
+          : 'https://bbs.shu.edu.cn',
+    );
+    try {
+      final cookies = await _cookieLoader(domain);
+      for (final cookie in cookies) {
+        await _cookieSetter(
+          WebViewCookie(
+            name: cookie.name,
+            value: '',
+            domain: _normalizeCookieDomain(cookie.domain, domain.host),
+            path: cookie.path,
+          ),
+        );
+      }
+    } on Object {
+      // Persisted cookies below are still cleared if WebView is unavailable.
+    }
+    final prefs = await _preferencesLoader();
+    await Future.wait([
+      prefs.remove(_legacyKey(mode)),
+      prefs.remove(_storedKey(mode)),
+    ]);
+  }
+
   Future<void> removeCachedCookieNames(Set<String> names) async {
     if (names.isEmpty) return;
     final prefs = await _preferencesLoader();

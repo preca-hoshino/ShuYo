@@ -15,6 +15,7 @@ class HomeDashboardPage extends StatelessWidget {
     required this.hasLocalAccount,
     required this.forumRequiresReauthentication,
     required this.hasAcademicAccount,
+    this.academicStudentId,
     required this.isAcademicLoginCompleting,
     required this.isCheckingConnection,
     required this.isInitialConnectionCheck,
@@ -25,8 +26,6 @@ class HomeDashboardPage extends StatelessWidget {
     required this.onOpenAnnouncements,
     required this.onOpenEmptyClassroom,
     required this.onOpenCourseRatings,
-    required this.showForumNetworkWarning,
-    required this.onOpenWebVpnProxy,
     required this.todayCourseContent,
     required this.announcementContent,
     this.isDemo = false,
@@ -37,6 +36,7 @@ class HomeDashboardPage extends StatelessWidget {
   final bool hasLocalAccount;
   final bool forumRequiresReauthentication;
   final bool hasAcademicAccount;
+  final String? academicStudentId;
   final bool isAcademicLoginCompleting;
   final bool isCheckingConnection;
   final bool isInitialConnectionCheck;
@@ -47,8 +47,6 @@ class HomeDashboardPage extends StatelessWidget {
   final VoidCallback onOpenAnnouncements;
   final VoidCallback onOpenEmptyClassroom;
   final VoidCallback onOpenCourseRatings;
-  final bool showForumNetworkWarning;
-  final VoidCallback onOpenWebVpnProxy;
   final String todayCourseContent;
   final String announcementContent;
   final bool isDemo;
@@ -78,23 +76,21 @@ class HomeDashboardPage extends StatelessWidget {
           ),
           const SizedBox(height: 10),
         ],
-        if (showForumNetworkWarning) ...[
-          _CampusNetworkWarningCard(onOpenWebVpnProxy: onOpenWebVpnProxy),
-          const SizedBox(height: 10),
-        ],
         _HomeRow(
           title: hasLocalAccount
               ? '欢迎回来，${profile.username}'
               : isAcademicLoginCompleting
                   ? '正在完成校园登录'
                   : hasAcademicAccount
-                      ? '你好！'
+                      ? academicStudentId?.isNotEmpty == true
+                          ? '你好，$academicStudentId！'
+                          : '你好！'
                       : '立即登录',
           content: !hasLocalAccount
               ? isAcademicLoginCompleting
                   ? '正在获取课表...'
                   : hasAcademicAccount
-                      ? '暂未登录乐乎论坛'
+                      ? '点此登录乐乎论坛'
                       : '登录后同步个人数据'
               : isCheckingConnection && !isInitialConnectionCheck
                   ? '正在连接论坛...'
@@ -278,79 +274,6 @@ class HomeDashboardPage extends StatelessWidget {
 
   String _pick(List<String> values) {
     return values[Random().nextInt(values.length)];
-  }
-}
-
-class _CampusNetworkWarningCard extends StatelessWidget {
-  const _CampusNetworkWarningCard({
-    required this.onOpenWebVpnProxy,
-  });
-
-  final VoidCallback onOpenWebVpnProxy;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.shuyoColors;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(14, 14, 12, 10),
-      decoration: BoxDecoration(
-        color: colors.surfaceAlt,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: colors.borderStrong),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.signal_wifi_bad,
-                  color: colors.textSecondary, size: 22),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  '未能连接到校园内网',
-                  style: TextStyle(
-                    color: colors.textPrimary,
-                    fontSize: 15.5,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 9),
-          RichText(
-            text: TextSpan(
-              style: TextStyle(
-                color: colors.textSecondary,
-                fontSize: 13.5,
-                height: 1.45,
-              ),
-              children: const [
-                TextSpan(
-                  text:
-                      '无法连接到上海大学内部网络，部分功能可能不可用。然而，如果你开启了“自动使用WebVPN代理”，并且已进行统一身份认证，你仍然可以直接使用这些功能。\n\n',
-                ),
-                TextSpan(text: '如果不起作用，请尝试使用校园VPN（'),
-                TextSpan(
-                  text: 'aTrustVPN',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-                TextSpan(text: '）或连接ShuWlan校园网以访问内网资源。'),
-              ],
-            ),
-          ),
-          const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton(
-              onPressed: onOpenWebVpnProxy,
-              child: const Text('WebVPN代理（推荐）'),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }
 

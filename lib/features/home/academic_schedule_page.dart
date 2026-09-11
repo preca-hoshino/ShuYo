@@ -2,6 +2,7 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../data/models/academic_schedule.dart';
@@ -27,12 +28,18 @@ class AcademicSchedulePage extends StatefulWidget {
     required this.notificationService,
     required this.widgetService,
     required this.onLoginRequired,
+    this.initialState,
+    this.initialDisplayState,
+    this.initialLoadError,
   });
 
   final AcademicScheduleRepository repository;
   final AcademicScheduleNotificationService notificationService;
   final AcademicScheduleWidgetService widgetService;
   final Future<void> Function() onLoginRequired;
+  final AcademicScheduleCacheState? initialState;
+  final AcademicScheduleDisplayState? initialDisplayState;
+  final String? initialLoadError;
 
   @override
   State<AcademicSchedulePage> createState() => _AcademicSchedulePageState();
@@ -52,12 +59,30 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
       const AcademicScheduleDisplaySettings(
           colorful: false, showTeacher: false);
   Map<String, int> _courseColorValues = const {};
+  late bool _usingInitialState;
+  String? _initialLoadError;
 
   @override
   void initState() {
     super.initState();
-    _loadFuture = _loadCached();
-    unawaited(_loadDisplaySettings());
+    final initialState = widget.initialState;
+    _usingInitialState =
+        initialState != null || widget.initialLoadError != null;
+    _initialLoadError = widget.initialLoadError;
+    if (initialState != null) {
+      _applyCachedState(initialState.schedule, initialState.weekState);
+      unawaited(
+        widget.widgetService.syncSchedule(
+          schedule: initialState.schedule,
+          weekState: initialState.weekState,
+        ),
+      );
+    }
+    final initialDisplayState = widget.initialDisplayState;
+    if (initialDisplayState != null) {
+      _applyDisplayState(initialDisplayState);
+    }
+    _loadFuture = _usingInitialState ? Future<void>.value() : _loadCached();
     _weekTimer = Timer.periodic(
       const Duration(minutes: 1),
       (_) => _refreshDisplayedWeekIfNeeded(),
@@ -70,9 +95,10 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
       appBar: AppBar(
         title: Text(_schedule?.term.displayName ?? '课表'),
         actions: [
-          TextButton(
-            onPressed: _schedule == null ? null : _setDisplayedWeekAsCurrent,
-            child: const Text('设为当周'),
+          IconButton(
+            tooltip: '设置开学日期',
+            onPressed: _schedule == null ? null : _setFirstWeekStartDate,
+            icon: const Icon(Icons.edit_calendar_outlined),
           ),
           IconButton(
             tooltip: '更多',
@@ -82,100 +108,123 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
           const SizedBox(width: 2),
         ],
       ),
-      body: FutureBuilder<void>(
-        future: _loadFuture,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
-            return const Center(
-                child: CircularProgressIndicator(strokeWidth: 3));
-          }
-          if (snapshot.hasError) {
-            return _ScheduleErrorState(
-              message: snapshot.error.toString(),
-              onRetry: () => setState(() => _loadFuture = _loadCached()),
-            );
-          }
-          final schedule = _schedule;
-          final weekState = _weekState;
-          if (schedule == null || weekState == null) {
-            return EmptyState(
-              icon: Icons.calendar_month_outlined,
-              title: '还没有课表',
-              message: '登录教务后刷新一次，就可以在本地显示课表。',
-              action: FilledButton.icon(
-                onPressed: _refreshSchedule,
-                icon: const Icon(Icons.refresh),
-                label: const Text('同步课表'),
-              ),
-            );
-          }
-          return _ScheduleBody(
-            schedule: schedule,
-            weekState: weekState,
-            displayedWeek: _displayedWeek,
-            displaySettings: _displaySettings,
-            courseColorValues: _courseColorValues,
-            onPreviousWeek: _displayedWeek <= 0
-                ? null
-                : () => setState(() {
-                      _displayedWeek--;
-                      _followsCurrentWeek = false;
-                      _selectedManualSlot = null;
-                    }),
-            onNextWeek: _displayedWeek >= schedule.vacationWeek
-                ? null
-                : () => setState(() {
-                      _displayedWeek++;
-                      _followsCurrentWeek = false;
-                      _selectedManualSlot = null;
-                    }),
-            onQuickWeekSelected: (week) => setState(() {
-              _displayedWeek = week;
-              _followsCurrentWeek = false;
-              _selectedManualSlot = null;
-            }),
-            selectedManualSlot: _selectedManualSlot,
-            canAddCourse: !schedule.isVacationWeek(_displayedWeek),
-            onEmptySlotTap: _handleEmptySlotTap,
-            onCourseTap: _handleCourseTap,
-          );
-        },
-      ),
+      body: _usingInitialState
+          ? _buildLoadedBody(_initialLoadError)
+          : FutureBuilder<void>(
+              future: _loadFuture,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const Center(
+                      child: CircularProgressIndicator(strokeWidth: 3));
+                }
+                if (snapshot.hasError) {
+                  return _buildLoadedBody(snapshot.error.toString());
+                }
+                return _buildLoadedBody(null);
+              },
+            ),
     );
   }
 
-  Future<void> _loadDisplaySettings() async {
-    final settings = await _displaySettingsService.loadSettings();
-    final colorValues = await _displaySettingsService.loadCourseColors();
-    if (!mounted) {
-      return;
+  Widget _buildLoadedBody(String? error) {
+    if (error != null) {
+      return _ScheduleErrorState(
+        message: error,
+        onRetry: _retryLoadCached,
+      );
     }
+    final schedule = _schedule;
+    final weekState = _weekState;
+    if (schedule == null || weekState == null) {
+      return EmptyState(
+        icon: Icons.calendar_month_outlined,
+        title: '还没有课表',
+        message: '登录教务后刷新一次，就可以在本地显示课表。',
+        action: FilledButton.icon(
+          onPressed: _refreshSchedule,
+          icon: const Icon(Icons.refresh),
+          label: const Text('同步课表'),
+        ),
+      );
+    }
+    return _ScheduleBody(
+      schedule: schedule,
+      weekState: weekState,
+      displayedWeek: _displayedWeek,
+      displaySettings: _displaySettings,
+      courseColorValues: _courseColorValues,
+      onPreviousWeek: _displayedWeek <= 1
+          ? null
+          : () => setState(() {
+                _displayedWeek--;
+                _followsCurrentWeek = false;
+                _selectedManualSlot = null;
+              }),
+      onNextWeek: _displayedWeek >= schedule.maxWeek
+          ? null
+          : () => setState(() {
+                _displayedWeek++;
+                _followsCurrentWeek = false;
+                _selectedManualSlot = null;
+              }),
+      onQuickWeekSelected: (week) => setState(() {
+        _displayedWeek = week;
+        _followsCurrentWeek = false;
+        _selectedManualSlot = null;
+      }),
+      selectedManualSlot: _selectedManualSlot,
+      canAddCourse: true,
+      onEmptySlotTap: _handleEmptySlotTap,
+      onCourseTap: _handleCourseTap,
+    );
+  }
+
+  void _retryLoadCached() {
     setState(() {
-      _displaySettings = settings;
-      _courseColorValues = colorValues;
+      _usingInitialState = false;
+      _initialLoadError = null;
+      _loadFuture = _loadCached();
     });
   }
 
   Future<void> _loadCached() async {
-    final schedule = await widget.repository.loadCachedSchedule();
-    final weekState = await widget.repository.loadWeekState();
+    final cachedStateFuture = widget.repository.loadCachedState();
+    final displayStateFuture = _displaySettingsService.loadState();
+    final cachedState = await cachedStateFuture;
+    final displayState = await displayStateFuture;
     if (!mounted) {
       return;
     }
     setState(() {
-      _schedule = schedule;
-      _weekState = weekState;
-      _displayedWeek = schedule == null
-          ? 1
-          : widget.repository.activeWeekFromState(schedule, weekState);
-      _followsCurrentWeek = true;
+      _applyCachedState(cachedState.schedule, cachedState.weekState);
+      _applyDisplayState(displayState);
     });
     unawaited(
       widget.widgetService.syncSchedule(
-        schedule: schedule,
-        weekState: weekState,
+        schedule: cachedState.schedule,
+        weekState: cachedState.weekState,
       ),
     );
+  }
+
+  void _applyDisplayState(AcademicScheduleDisplayState state) {
+    _displaySettings = state.settings;
+    _courseColorValues = state.courseColorValues;
+  }
+
+  void _applyCachedState(
+    AcademicSchedule? schedule,
+    ScheduleWeekState weekState,
+  ) {
+    _schedule = schedule;
+    _weekState = weekState;
+    _displayedWeek = schedule == null
+        ? 1
+        : _displayableWeek(
+            widget.repository.activeWeekFromState(schedule, weekState),
+            schedule,
+          );
+    _followsCurrentWeek = true;
   }
 
   Future<void> _refreshSchedule() async {
@@ -183,6 +232,7 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
       return;
     }
     setState(() => _refreshing = true);
+    if (kDebugMode) debugPrint('[SHU_SCHEDULE_FLOW] manual refresh start');
     try {
       final schedule = await widget.repository.refreshSchedule();
       final weekState = await widget.repository.loadWeekState();
@@ -192,8 +242,10 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
       setState(() {
         _schedule = schedule;
         _weekState = weekState;
-        _displayedWeek =
-            widget.repository.activeWeekFromState(schedule, weekState);
+        _displayedWeek = _displayableWeek(
+          widget.repository.activeWeekFromState(schedule, weekState),
+          schedule,
+        );
         _followsCurrentWeek = true;
       });
       unawaited(
@@ -206,10 +258,25 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
           await widget.notificationService.syncScheduleReminders(
         requestPermission: true,
       );
+      if (kDebugMode) debugPrint('[SHU_SCHEDULE_FLOW] manual refresh success');
       _showScheduleReminderSnack('课表已同步', reminderCount);
-    } on AcademicAuthException catch (_) {
+    } on AcademicAuthException catch (error, stackTrace) {
+      if (kDebugMode) {
+        debugPrint('[SHU_SCHEDULE_FLOW] manual refresh requires login: $error');
+        debugPrintStack(
+          label: '[SHU_SCHEDULE_FLOW] stack',
+          stackTrace: stackTrace,
+        );
+      }
       await _handleLoginRequired();
-    } on Object catch (error) {
+    } on Object catch (error, stackTrace) {
+      if (kDebugMode) {
+        debugPrint('[SHU_SCHEDULE_FLOW] manual refresh failed: $error');
+        debugPrintStack(
+          label: '[SHU_SCHEDULE_FLOW] stack',
+          stackTrace: stackTrace,
+        );
+      }
       await _showErrorDialog(
         title: '课表刷新失败',
         message: error.toString(),
@@ -225,46 +292,38 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
     if (!mounted) {
       return;
     }
-    final retry = await showDialog<bool>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('需要登录教务系统'),
-          content: const Text('请先在教务系统完成登录，然后回到这里刷新课表。'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('去登录'),
-            ),
-          ],
-        );
-      },
-    );
-    if (retry != true || !mounted) {
-      return;
-    }
+    _showSnack('校园账户登录信息已过期，请重新登录');
     await widget.onLoginRequired();
     if (!mounted) {
       return;
     }
     await _loadCached();
-    if (mounted && _schedule != null) _showSnack('课表已同步');
   }
 
-  Future<void> _setDisplayedWeekAsCurrent() async {
-    final week = _displayedWeek;
-    await widget.repository.setCurrentWeek(week);
+  Future<void> _setFirstWeekStartDate() async {
+    final schedule = _schedule;
+    final currentState = _weekState;
+    if (schedule == null || currentState == null) return;
+    final picked = await showDialog<DateTime>(
+      context: context,
+      builder: (context) => _FirstWeekDatePickerDialog(
+        initialDate: currentState.firstWeekStart,
+      ),
+    );
+    if (picked == null || !mounted) return;
+    await widget.repository.setFirstWeekStart(picked);
     final weekState = await widget.repository.loadWeekState();
     if (!mounted) {
       return;
     }
     setState(() {
       _weekState = weekState;
+      _displayedWeek = _displayableWeek(
+        widget.repository.activeWeekFromState(schedule, weekState),
+        schedule,
+      );
       _followsCurrentWeek = true;
+      _selectedManualSlot = null;
     });
     unawaited(
       widget.widgetService.syncSchedule(
@@ -275,12 +334,12 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
     await widget.notificationService.syncScheduleReminders(
       requestPermission: true,
     );
-    _showSnack('已将第$week周设为当周');
+    _showSnack('已将 ${picked.month}月${picked.day}日设为第一周首日');
   }
 
   Future<void> _handleEmptySlotTap(_ScheduleSlot slot) async {
     final schedule = _schedule;
-    if (schedule == null || schedule.isVacationWeek(_displayedWeek)) {
+    if (schedule == null) {
       return;
     }
     final selected = _selectedManualSlot;
@@ -293,7 +352,7 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
 
   Future<void> _openManualCourseSheet(_ScheduleSlot slot) async {
     final schedule = _schedule;
-    if (schedule == null || schedule.isVacationWeek(_displayedWeek)) {
+    if (schedule == null) {
       return;
     }
     final result = await Navigator.of(context).push<ScheduleCourseEditorResult>(
@@ -928,7 +987,13 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
 
   void _showScheduleReminderSnack(String prefix, int reminderCount) {
     final schedule = _schedule;
-    if (schedule != null && schedule.isVacationWeek(_displayedWeek)) {
+    final weekState = _weekState;
+    final activeWeek = schedule == null || weekState == null
+        ? null
+        : widget.repository.activeWeekFromState(schedule, weekState);
+    if (schedule != null &&
+        activeWeek != null &&
+        schedule.isVacationWeek(activeWeek)) {
       _showSnack('$prefix，假期中无课程提醒');
       return;
     }
@@ -936,7 +1001,7 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
       _showSnack('$prefix，已安排 $reminderCount 条课程提醒');
       return;
     }
-    _showSnack('$prefix，未安排课程提醒，请检查通知/精确提醒权限或当前周设置');
+    _showSnack('$prefix，未安排课程提醒');
   }
 
   Future<void> _showErrorDialog({
@@ -976,11 +1041,12 @@ class _AcademicSchedulePageState extends State<AcademicSchedulePage> {
       schedule,
       weekState,
     );
-    if (activeWeek == _displayedWeek) {
+    final displayedWeek = _displayableWeek(activeWeek, schedule);
+    if (displayedWeek == _displayedWeek) {
       return;
     }
     setState(() {
-      _displayedWeek = activeWeek;
+      _displayedWeek = displayedWeek;
       _selectedManualSlot = null;
     });
     unawaited(
@@ -1014,6 +1080,9 @@ enum _CourseDeleteScope {
   allWeeksInSlot,
   allCourseSlots,
 }
+
+int _displayableWeek(int activeWeek, AcademicSchedule schedule) =>
+    activeWeek.clamp(1, schedule.maxWeek);
 
 // Kept until the legacy bottom-sheet editor is removed after the full-page
 // editor rollout is verified.
@@ -1093,6 +1162,13 @@ class _DisplaySettingsSheetState extends State<_DisplaySettingsSheet> {
               onChanged: (value) => setState(() => _showTeacher = value),
             ),
             Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+              child: Text(
+                'ShuYo 支持添加小组件，试着在系统桌面中找找吧～',
+                style: ShuYoTextStyles.meta(color: colors.textMuted),
+              ),
+            ),
+            Padding(
               padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
               child: SizedBox(
                 width: double.infinity,
@@ -1108,6 +1184,83 @@ class _DisplaySettingsSheetState extends State<_DisplaySettingsSheet> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FirstWeekDatePickerDialog extends StatefulWidget {
+  const _FirstWeekDatePickerDialog({required this.initialDate});
+
+  final DateTime initialDate;
+
+  @override
+  State<_FirstWeekDatePickerDialog> createState() =>
+      _FirstWeekDatePickerDialogState();
+}
+
+class _FirstWeekDatePickerDialogState
+    extends State<_FirstWeekDatePickerDialog> {
+  late DateTime _selectedDate = widget.initialDate;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.shuyoColors;
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+      child: Container(
+        width: double.infinity,
+        constraints: const BoxConstraints(maxWidth: 400),
+        decoration: BoxDecoration(
+          color: colors.surface,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 4),
+                child: Text(
+                  '选择开学日期',
+                  style: ShuYoTextStyles.sectionTitle(
+                    color: colors.textPrimary,
+                  ),
+                ),
+              ),
+              CalendarDatePicker(
+                initialDate: widget.initialDate,
+                firstDate: DateTime(2000),
+                lastDate: DateTime(2100, 12, 31),
+                selectableDayPredicate: (date) =>
+                    date.weekday == DateTime.monday,
+                onDateChanged: (date) => setState(() => _selectedDate = date),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('取消'),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      onPressed: () => Navigator.of(context).pop(_selectedDate),
+                      child: const Text('确定'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1769,7 +1922,6 @@ class _ScheduleBody extends StatelessWidget {
       children: [
         _WeekSwitcher(
           week: displayedWeek,
-          isVacation: schedule.isVacationWeek(displayedWeek),
           maxWeek: schedule.maxWeek,
           onPrevious: onPreviousWeek,
           onNext: onNextWeek,
@@ -1823,7 +1975,6 @@ class _ScheduleBody extends StatelessWidget {
 class _WeekSwitcher extends StatefulWidget {
   const _WeekSwitcher({
     required this.week,
-    required this.isVacation,
     required this.maxWeek,
     required this.onPrevious,
     required this.onNext,
@@ -1831,7 +1982,6 @@ class _WeekSwitcher extends StatefulWidget {
   });
 
   final int week;
-  final bool isVacation;
   final int maxWeek;
   final VoidCallback? onPrevious;
   final VoidCallback? onNext;
@@ -1915,9 +2065,7 @@ class _WeekSwitcherState extends State<_WeekSwitcher> {
                                 ),
                               )
                             : Text(
-                                widget.isVacation
-                                    ? '假期中'
-                                    : '第 ${widget.week} 周',
+                                '第 ${widget.week} 周',
                                 key: const ValueKey('week-title'),
                                 textAlign: TextAlign.center,
                                 style: ShuYoTextStyles.title(

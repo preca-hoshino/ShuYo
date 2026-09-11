@@ -34,6 +34,64 @@ void main() {
     expect(state.currentWeek, 7);
   });
 
+  test('cached state loads the schedule and week anchor together', () async {
+    SharedPreferences.setMockInitialValues({});
+    final repository = AcademicScheduleRepository(
+      apiClient: _FakeAcademicScheduleApiClient(_schedule),
+    );
+    await repository.saveCachedSchedule(_schedule);
+    await repository.setCurrentWeek(3, now: DateTime(2026, 8, 31));
+
+    final cached = await repository.loadCachedState();
+
+    expect(cached.schedule?.term.displayName, _schedule.term.displayName);
+    expect(cached.weekState.currentWeek, 3);
+    expect(cached.weekState.anchorMonday, DateTime(2026, 8, 31));
+  });
+
+  test('legacy week anchors derive the first teaching week start', () {
+    final state = ScheduleWeekState(
+      currentWeek: 7,
+      anchorMonday: DateTime(2026, 8, 31),
+    );
+
+    expect(state.firstWeekStart, DateTime(2026, 7, 20));
+  });
+
+  test('setting the first week start stores a canonical Monday anchor',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'academic.schedule.anchorWeek': 7,
+      'academic.schedule.anchorMonday': '2026-08-31T00:00:00.000',
+    });
+    final repository = AcademicScheduleRepository(
+      apiClient: _FakeAcademicScheduleApiClient(_schedule),
+    );
+
+    await repository.setFirstWeekStart(DateTime(2026, 8, 26));
+    final state = await repository.loadWeekState();
+
+    expect(state.currentWeek, 1);
+    expect(state.anchorMonday, DateTime(2026, 8, 24));
+    expect(state.firstWeekStart, DateTime(2026, 8, 24));
+    expect(
+      repository.activeWeekFromState(
+        _schedule,
+        state,
+        now: DateTime(2026, 9, 7),
+      ),
+      3,
+    );
+    expect(
+      repository.dateForWeekday(
+        state: state,
+        displayedWeek: 3,
+        weekday: DateTime.wednesday,
+      ),
+      DateTime(2026, 9, 9),
+    );
+  });
+
   test('active week can be the vacation before week one', () {
     final repository = AcademicScheduleRepository(
       apiClient: _FakeAcademicScheduleApiClient(_schedule),
@@ -65,6 +123,9 @@ class _FakeAcademicScheduleApiClient extends AcademicScheduleApiClient {
 }
 
 class _FakeAcademicAuthService implements AcademicAuthService {
+  @override
+  Future<void> clearCachedCookiesForReauthentication() async {}
+
   @override
   Future<Set<String>> clearCookies() async => {};
 

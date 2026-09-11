@@ -120,17 +120,10 @@ class _UserProfilePageState extends State<UserProfilePage> {
   }
 
   void _openMessageSheet(UserProfile profile) {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: context.shuyoColors.surface,
-      showDragHandle: true,
-      builder: (context) {
-        return _PrivateMessageSheet(
-          repository: widget.repository,
-          recipient: profile.username,
-        );
-      },
+    showPrivateMessageComposer(
+      context,
+      repository: widget.repository,
+      recipient: profile.username,
     );
   }
 
@@ -145,6 +138,25 @@ class _UserProfilePageState extends State<UserProfilePage> {
       ),
     );
   }
+}
+
+Future<void> showPrivateMessageComposer(
+  BuildContext context, {
+  required ForumRepository repository,
+  required String recipient,
+  String? initialDraftId,
+}) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: context.shuyoColors.surface,
+    showDragHandle: true,
+    builder: (context) => _PrivateMessageSheet(
+      repository: repository,
+      recipient: recipient,
+      initialDraftId: initialDraftId,
+    ),
+  );
 }
 
 class _UserProfileBundle {
@@ -426,10 +438,12 @@ class _PrivateMessageSheet extends StatefulWidget {
   const _PrivateMessageSheet({
     required this.repository,
     required this.recipient,
+    this.initialDraftId,
   });
 
   final ForumRepository repository;
   final String recipient;
+  final String? initialDraftId;
 
   @override
   State<_PrivateMessageSheet> createState() => _PrivateMessageSheetState();
@@ -442,7 +456,7 @@ class _PrivateMessageSheetState extends State<_PrivateMessageSheet> {
   final _rawFocusNode = FocusNode();
   final _openedAt = DateTime.now();
   final _images = <UploadedImage>[];
-  Timer? _draftSaveTimer;
+  ForumDraftSession? _draftSession;
   bool _submitting = false;
   bool _uploading = false;
   bool _showEmojiPanel = false;
@@ -451,13 +465,8 @@ class _PrivateMessageSheetState extends State<_PrivateMessageSheet> {
   bool _lastTextFocusWasTitle = false;
   bool _draftReady = false;
   bool _restoringDraft = false;
-
-  String get _draftKey {
-    return ForumDraftStore.newPrivateMessageKey(
-      widget.repository.profile.username,
-      widget.recipient,
-    );
-  }
+  bool _allowPop = false;
+  bool _closing = false;
 
   @override
   void initState() {
@@ -473,8 +482,8 @@ class _PrivateMessageSheetState extends State<_PrivateMessageSheet> {
 
   @override
   void dispose() {
-    _draftSaveTimer?.cancel();
     unawaited(_saveDraftNow());
+    _draftSession?.dispose();
     _titleController.removeListener(_handleTitleChanged);
     _rawController.removeListener(_handleDraftChanged);
     _titleFocusNode.removeListener(_handleTitleFocusChanged);
@@ -489,108 +498,167 @@ class _PrivateMessageSheetState extends State<_PrivateMessageSheet> {
   @override
   Widget build(BuildContext context) {
     final bottom = MediaQuery.viewInsetsOf(context).bottom;
-    return Padding(
-      padding: EdgeInsets.fromLTRB(16, 4, 16, 16 + bottom),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '发给 ${widget.recipient}',
-            style: const TextStyle(fontSize: 16.5, fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _titleController,
-            focusNode: _titleFocusNode,
-            textInputAction: TextInputAction.next,
-            decoration: InputDecoration(
-              labelText: '标题',
-              border: const OutlineInputBorder(),
-              errorText: _titleEmojiRejected
-                  ? ForumTitleRules.disallowedEmojiMessage
-                  : null,
+    return PopScope(
+      canPop: _allowPop,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) unawaited(_requestClose());
+      },
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(16, 4, 16, 16 + bottom),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '发给 ${widget.recipient}',
+              style:
+                  const TextStyle(fontSize: 16.5, fontWeight: FontWeight.w600),
             ),
-          ),
-          const SizedBox(height: 10),
-          TextField(
-            controller: _rawController,
-            focusNode: _rawFocusNode,
-            minLines: 4,
-            maxLines: 8,
-            onTap: _handleRawTap,
-            decoration: const InputDecoration(
-              labelText: '内容',
-              alignLabelWithHint: true,
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 10),
-          if (_images.isNotEmpty) ...[
-            ComposerAttachmentPreviewRow(
-              images: _images,
-              onRemove: _submitting || _uploading
-                  ? null
-                  : (image) {
-                      setState(() => _images.remove(image));
-                      _scheduleDraftSave();
-                    },
+            const SizedBox(height: 12),
+            TextField(
+              controller: _titleController,
+              focusNode: _titleFocusNode,
+              textInputAction: TextInputAction.next,
+              decoration: InputDecoration(
+                labelText: '标题',
+                border: const OutlineInputBorder(),
+                errorText: _titleEmojiRejected
+                    ? ForumTitleRules.disallowedEmojiMessage
+                    : null,
+              ),
             ),
             const SizedBox(height: 10),
-          ],
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              ActionChip(
-                avatar: _uploading
+            TextField(
+              controller: _rawController,
+              focusNode: _rawFocusNode,
+              minLines: 4,
+              maxLines: 8,
+              onTap: _handleRawTap,
+              decoration: const InputDecoration(
+                labelText: '内容',
+                alignLabelWithHint: true,
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 10),
+            if (_images.isNotEmpty) ...[
+              ComposerAttachmentPreviewRow(
+                images: _images,
+                onRemove: _submitting || _uploading
+                    ? null
+                    : (image) {
+                        setState(() => _images.remove(image));
+                        _scheduleDraftSave();
+                      },
+              ),
+              const SizedBox(height: 10),
+            ],
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                ActionChip(
+                  avatar: _uploading
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 3),
+                        )
+                      : const Icon(Icons.image_outlined, size: 18),
+                  label: const Text('添加图片'),
+                  onPressed: _uploading ? null : _pickAndUpload,
+                ),
+                ActionChip(
+                  avatar: const Icon(Icons.emoji_emotions_outlined, size: 18),
+                  label: const Text('Emoji'),
+                  onPressed:
+                      _submitting || _uploading ? null : _toggleEmojiPanel,
+                ),
+              ],
+            ),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 180),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              child: _showEmojiPanel
+                  ? InlineEmojiPanel(
+                      key: const ValueKey('emoji-panel'),
+                      controller: _rawController,
+                    )
+                  : const SizedBox.shrink(
+                      key: ValueKey('emoji-empty'),
+                    ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: _submitting || _uploading ? null : _submit,
+                icon: _submitting
                     ? const SizedBox(
                         width: 18,
                         height: 18,
                         child: CircularProgressIndicator(strokeWidth: 3),
                       )
-                    : const Icon(Icons.image_outlined, size: 18),
-                label: const Text('添加图片'),
-                onPressed: _uploading ? null : _pickAndUpload,
+                    : const Icon(Icons.send),
+                label: Text(_submitting ? '发送中...' : '发送'),
               ),
-              ActionChip(
-                avatar: const Icon(Icons.emoji_emotions_outlined, size: 18),
-                label: const Text('Emoji'),
-                onPressed: _submitting || _uploading ? null : _toggleEmojiPanel,
-              ),
-            ],
-          ),
-          AnimatedSwitcher(
-            duration: const Duration(milliseconds: 180),
-            switchInCurve: Curves.easeOutCubic,
-            switchOutCurve: Curves.easeInCubic,
-            child: _showEmojiPanel
-                ? InlineEmojiPanel(
-                    key: const ValueKey('emoji-panel'),
-                    controller: _rawController,
-                  )
-                : const SizedBox.shrink(
-                    key: ValueKey('emoji-empty'),
-                  ),
-          ),
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              onPressed: _submitting || _uploading ? null : _submit,
-              icon: _submitting
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 3),
-                    )
-                  : const Icon(Icons.send),
-              label: Text(_submitting ? '发送中...' : '发送'),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _requestClose() async {
+    if (_closing || _submitting) return;
+    if (_titleController.text.trim().isEmpty &&
+        _rawController.text.trim().isEmpty &&
+        _images.isEmpty) {
+      _draftReady = false;
+      await _draftSession?.discard();
+      if (!mounted) return;
+      if (mounted) setState(() => _allowPop = true);
+      if (mounted) Navigator.of(context).pop();
+      return;
+    }
+    _closing = true;
+    final save = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('保存草稿'),
+        content: const Text('保存后可在草稿箱中继续编辑。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('舍弃'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('保存'),
           ),
         ],
       ),
     );
+    if (!mounted) return;
+    if (save == null) {
+      _closing = false;
+      return;
+    }
+    if (save) {
+      if (_draftSession == null) {
+        _startDraft();
+        _draftReady = true;
+      }
+      await _saveDraftNow();
+    } else {
+      _draftReady = false;
+      await _draftSession?.discard();
+    }
+    if (!mounted) return;
+    _draftReady = false;
+    setState(() => _allowPop = true);
+    Navigator.of(context).pop();
   }
 
   void _handleTitleChanged() {
@@ -704,8 +772,10 @@ class _PrivateMessageSheetState extends State<_PrivateMessageSheet> {
       _showSnack('内容至少 3 个字');
       return;
     }
-    setState(() => _submitting = true);
     try {
+      await _saveDraftNow();
+      if (!mounted) return;
+      setState(() => _submitting = true);
       await widget.repository.createPrivateMessage(
         PrivateMessageDraft(
           title: title,
@@ -721,7 +791,7 @@ class _PrivateMessageSheetState extends State<_PrivateMessageSheet> {
       if (!mounted) {
         return;
       }
-      await ForumDraftStore.remove(_draftKey);
+      await _draftSession?.discard();
       if (!mounted) {
         return;
       }
@@ -747,12 +817,29 @@ class _PrivateMessageSheetState extends State<_PrivateMessageSheet> {
   }
 
   Future<void> _loadDraft() async {
-    final draft = await ForumDraftStore.load(_draftKey);
+    final username = widget.repository.profile.username;
+    final requestedId = widget.initialDraftId;
+    final draft = requestedId == null
+        ? await ForumDraftStore.latest(
+            username,
+            type: ForumDraftType.newPrivateMessage,
+            recipient: widget.recipient,
+          )
+        : await ForumDraftStore.loadById(username, requestedId);
     if (!mounted) {
       return;
     }
     if (draft == null) {
+      _startDraft();
       _draftReady = true;
+      setState(() {});
+      return;
+    }
+    if (requestedId != null) {
+      _startDraft(draft);
+      _restoreDraft(draft);
+      _draftReady = true;
+      setState(() {});
       return;
     }
     final shouldRestore = await showDialog<bool>(
@@ -764,7 +851,7 @@ class _PrivateMessageSheetState extends State<_PrivateMessageSheet> {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('丢弃'),
+              child: const Text('新建'),
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(true),
@@ -778,12 +865,30 @@ class _PrivateMessageSheetState extends State<_PrivateMessageSheet> {
       return;
     }
     if (shouldRestore == true) {
+      _startDraft(draft);
       _restoreDraft(draft);
       _draftReady = true;
+      setState(() {});
       return;
     }
-    await ForumDraftStore.remove(_draftKey);
+    _startDraft();
     _draftReady = true;
+    setState(() {});
+  }
+
+  void _startDraft([ForumComposerDraft? draft]) {
+    final username = widget.repository.profile.username;
+    _draftSession?.dispose();
+    _draftSession = ForumDraftSession(
+      draft ??
+          ForumComposerDraft(
+            id: ForumDraftStore.createId(),
+            type: ForumDraftType.newPrivateMessage,
+            username: username,
+            recipient: widget.recipient,
+            createdAt: DateTime.now(),
+          ),
+    );
   }
 
   void _restoreDraft(ForumComposerDraft draft) {
@@ -806,10 +911,12 @@ class _PrivateMessageSheetState extends State<_PrivateMessageSheet> {
     if (!_draftReady || _restoringDraft || _submitting) {
       return;
     }
-    _draftSaveTimer?.cancel();
-    _draftSaveTimer = Timer(
-      const Duration(milliseconds: 700),
-      () => unawaited(_saveDraftNow()),
+    _draftSession?.update(
+      _draftSession!.draft.copyWith(
+        title: _titleController.text,
+        raw: _rawController.text,
+        images: List<UploadedImage>.of(_images),
+      ),
     );
   }
 
@@ -817,14 +924,8 @@ class _PrivateMessageSheetState extends State<_PrivateMessageSheet> {
     if (!_draftReady || _restoringDraft || _submitting) {
       return;
     }
-    await ForumDraftStore.save(
-      _draftKey,
-      ForumComposerDraft(
-        title: _titleController.text,
-        raw: _rawController.text,
-        images: List<UploadedImage>.of(_images),
-      ),
-    );
+    _scheduleDraftSave();
+    await _draftSession?.flush();
   }
 }
 

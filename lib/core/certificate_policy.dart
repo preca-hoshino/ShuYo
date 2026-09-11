@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import 'forum_constants.dart';
+import 'forum_url_resolver.dart';
 
 class CertificatePolicy {
   const CertificatePolicy._();
@@ -15,6 +16,7 @@ class CertificatePolicy {
     // stack. Keep the temporary invalid-certificate exception Android-only.
     return defaultTargetPlatform == TargetPlatform.android &&
         allowInvalidForumCertificate &&
+        !ForumUrlResolver.usesWebVpn &&
         host.toLowerCase() == ForumConstants.host;
   }
 

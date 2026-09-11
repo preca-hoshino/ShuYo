@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 
 import '../../data/models/user_profile.dart';
@@ -13,7 +15,10 @@ class ProfileHeader extends StatelessWidget {
     required this.title,
     required this.subtitle,
     this.avatarUrl,
+    this.avatarBytes,
     this.backgroundUrl,
+    this.backgroundBytes,
+    this.onEditAvatar,
     this.onTap,
     this.trailing,
     this.privateImage = false,
@@ -23,7 +28,10 @@ class ProfileHeader extends StatelessWidget {
   final String title;
   final String subtitle;
   final String? avatarUrl;
+  final Uint8List? avatarBytes;
   final String? backgroundUrl;
+  final Uint8List? backgroundBytes;
+  final VoidCallback? onEditAvatar;
   final VoidCallback? onTap;
   final Widget? trailing;
   final bool privateImage;
@@ -45,6 +53,7 @@ class ProfileHeader extends StatelessWidget {
               borderRadius: BorderRadius.circular(8),
               child: _ProfileBackground(
                 url: backgroundUrl ?? profile.profileBackgroundUrl(),
+                bytes: backgroundBytes,
                 privateImage: privateImage,
               ),
             ),
@@ -58,10 +67,41 @@ class ProfileHeader extends StatelessWidget {
                 color: colors.background,
                 shape: BoxShape.circle,
               ),
-              child: ForumAvatar(
-                url: avatarUrl ?? profile.avatarUrl(size: 144),
-                size: 68,
-                privateImage: privateImage,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  _ProfileAvatar(
+                    url: avatarUrl ?? profile.avatarUrl(size: 144),
+                    bytes: avatarBytes,
+                    privateImage: privateImage,
+                  ),
+                  if (onEditAvatar != null)
+                    Positioned(
+                      right: -4,
+                      bottom: -4,
+                      child: Tooltip(
+                        message: '编辑头像',
+                        child: Material(
+                          color: colors.accent,
+                          shape: const CircleBorder(),
+                          elevation: 2,
+                          child: InkWell(
+                            customBorder: const CircleBorder(),
+                            onTap: onEditAvatar,
+                            child: const SizedBox(
+                              width: 28,
+                              height: 28,
+                              child: Icon(
+                                Icons.edit,
+                                size: 16,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
           ),
@@ -114,15 +154,61 @@ class ProfileHeader extends StatelessWidget {
   }
 }
 
-class _ProfileBackground extends StatelessWidget {
-  const _ProfileBackground({required this.url, this.privateImage = false});
+class _ProfileAvatar extends StatelessWidget {
+  const _ProfileAvatar({
+    required this.url,
+    required this.bytes,
+    required this.privateImage,
+  });
 
   final String url;
+  final Uint8List? bytes;
+  final bool privateImage;
+
+  @override
+  Widget build(BuildContext context) {
+    final bytes = this.bytes;
+    if (bytes == null) {
+      return ForumAvatar(
+        url: url,
+        size: 68,
+        privateImage: privateImage,
+      );
+    }
+    return ClipOval(
+      child: Image.memory(
+        bytes,
+        width: 68,
+        height: 68,
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+      ),
+    );
+  }
+}
+
+class _ProfileBackground extends StatelessWidget {
+  const _ProfileBackground({
+    required this.url,
+    required this.bytes,
+    this.privateImage = false,
+  });
+
+  final String url;
+  final Uint8List? bytes;
   final bool privateImage;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.shuyoColors;
+    final bytes = this.bytes;
+    if (bytes != null) {
+      return Image.memory(
+        bytes,
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+      );
+    }
     if (url.isEmpty) {
       return DecoratedBox(
         decoration: BoxDecoration(

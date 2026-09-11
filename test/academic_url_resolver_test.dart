@@ -24,19 +24,19 @@ void main() {
     );
   });
 
-  test('WebVPN mode resolves the transformed campus host', () {
+  test('WebVPN setting does not change the academic route', () {
     ForumUrlResolver.configure(useWebVpn: true);
 
-    expect(AcademicUrlResolver.entryUri.host, AcademicUrlResolver.webVpnHost);
+    expect(AcademicUrlResolver.entryUri.host, AcademicConstants.host);
     expect(
       AcademicUrlResolver.isTicketLoginUrl(
         'https://${AcademicUrlResolver.webVpnHost}/jwglxt/ticketlogin',
       ),
-      isTrue,
+      isFalse,
     );
     expect(
       AcademicUrlResolver.isPreparedWebVpnAcademicUrl(
-        'https://${AcademicUrlResolver.webVpnHost}/jwglxt/xtgl/index_initMenu.html',
+        'https://${AcademicConstants.host}/jwglxt/xtgl/index_initMenu.html',
       ),
       isTrue,
     );

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/classroom_url_resolver.dart';
 import '../../data/models/classroom.dart';
 import '../../data/repositories/classroom_repository.dart';
 import '../../data/services/classroom_api_client.dart';
@@ -12,10 +13,12 @@ class EmptyClassroomPage extends StatefulWidget {
     super.key,
     required this.repository,
     this.initialDate,
+    this.onWebVpnExpired,
   });
 
   final ClassroomRepository repository;
   final DateTime? initialDate;
+  final Future<void> Function()? onWebVpnExpired;
 
   @override
   State<EmptyClassroomPage> createState() => _EmptyClassroomPageState();
@@ -165,6 +168,9 @@ class _EmptyClassroomPageState extends State<EmptyClassroomPage> {
         _selectedRange ??= widget.repository.defaultRangeFor(options);
       });
       _search(forceRefresh: force);
+    } on ClassroomWebVpnAuthException {
+      await widget.onWebVpnExpired?.call();
+      rethrow;
     } finally {
       if (mounted) {
         setState(() => _refreshingOptions = false);
@@ -272,17 +278,22 @@ class _EmptyClassroomPageState extends State<EmptyClassroomPage> {
     required bool forceRefresh,
   }) async {
     final results = <ClassroomAvailabilityResult>[];
-    for (final building in buildings) {
-      final result = await widget.repository.search(
-        ClassroomAvailabilityQuery(
-          building: building,
-          date: _selectedDate,
-          startSection: range.start,
-          endSection: range.end,
-        ),
-        forceRefresh: forceRefresh,
-      );
-      results.add(result);
+    try {
+      for (final building in buildings) {
+        final result = await widget.repository.search(
+          ClassroomAvailabilityQuery(
+            building: building,
+            date: _selectedDate,
+            startSection: range.start,
+            endSection: range.end,
+          ),
+          forceRefresh: forceRefresh,
+        );
+        results.add(result);
+      }
+    } on ClassroomWebVpnAuthException {
+      await widget.onWebVpnExpired?.call();
+      rethrow;
     }
     return _ClassroomQueryResult(
       date: _selectedDate,
@@ -293,10 +304,15 @@ class _EmptyClassroomPageState extends State<EmptyClassroomPage> {
   }
 
   String _friendlyError(Object error) {
-    if (error is ClassroomApiException) {
+    if (error is ClassroomWebVpnAuthException) {
       return error.message;
     }
-    return '空教室系统暂时无法访问，请稍后重试。';
+    if (error is ClassroomApiException && ClassroomUrlResolver.usesWebVpn) {
+      return error.message;
+    }
+    return ClassroomAccessWindow.directFailureMessage(
+      detail: error is ClassroomApiException ? error.message : null,
+    );
   }
 }
 

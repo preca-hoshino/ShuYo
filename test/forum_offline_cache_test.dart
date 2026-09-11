@@ -66,6 +66,54 @@ void main() {
     expect(restored?.activityCounts?['bookmarks'], 1);
   });
 
+  test('local startup restores an account without validating the network',
+      () async {
+    SharedPreferences.setMockInitialValues({});
+    const user = DiscourseUser(
+      id: 42,
+      username: 'Lilin',
+      avatarTemplate: '/user_avatar/lilin/{size}/x.png',
+    );
+    await const ForumAccountSnapshotStore().save(
+      ForumAccountSnapshot(
+        session: CurrentUserSession(
+          user: user,
+          unreadNotifications: 0,
+          allUnreadNotifications: 0,
+          newPersonalMessages: 0,
+          canCreateTopic: false,
+        ),
+        profile: UserProfile(user: user),
+        summary: null,
+        lastOnlineAt: DateTime(2026, 8, 21),
+        profileUpdatedAt: null,
+        summaryUpdatedAt: null,
+        activityCounts: null,
+        activityUpdatedAt: null,
+      ),
+    );
+
+    final repository = await ForumRepositoryFactory.loadLocal();
+
+    expect(repository.hasLocalAccount, isTrue);
+    expect(repository.connectionState, ForumConnectionState.cachedOffline);
+    expect(repository.profile.username, 'Lilin');
+  });
+
+  test('local startup does not turn stored cookies into an online account',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'forum.auth.cached_cookie_header.direct':
+          '_t=stored; _forum_session=stored-session',
+    });
+
+    final repository = await ForumRepositoryFactory.loadLocal();
+
+    expect(repository.connectionState, ForumConnectionState.firstUse);
+    expect(repository.hasLocalAccount, isFalse);
+    expect(repository.isOnline, isFalse);
+  });
+
   test('expired topic feeds remain readable for offline startup', () async {
     SharedPreferences.setMockInitialValues({});
     final cache = await ForumPersistentCache.open(username: 'Lilin');

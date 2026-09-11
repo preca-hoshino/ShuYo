@@ -604,6 +604,9 @@ class HtmlText {
         return;
       }
       if (tag == 'a') {
+        if (_isDiscourseHeadingAnchor(node)) {
+          return;
+        }
         if (_containsRenderableImage(node)) {
           final fullUrl = _fullImageSource(node);
           if (fullUrl != null) {
@@ -1038,6 +1041,19 @@ class HtmlText {
 
   static bool _isHeadingTag(String tag) {
     return RegExp(r'^h[1-6]$').hasMatch(tag);
+  }
+
+  static bool _isDiscourseHeadingAnchor(dom.Element element) {
+    if (!_hasOwnClass(element, 'anchor') ||
+        _cleanInlineText(element.text).isNotEmpty) {
+      return false;
+    }
+    final parentTag = element.parent?.localName?.toLowerCase() ?? '';
+    if (!_isHeadingTag(parentTag)) {
+      return false;
+    }
+    return (element.attributes['href'] ?? '').trim().isNotEmpty ||
+        (element.attributes['name'] ?? '').trim().isNotEmpty;
   }
 
   static bool _isListElement(dom.Element element) {

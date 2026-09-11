@@ -1,17 +1,27 @@
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:home_widget/home_widget.dart';
 
 import '../core/client_app_info.dart';
+import '../core/classroom_url_resolver.dart';
 import '../core/forum_url_resolver.dart';
 import '../data/demo/demo_data_bundle.dart';
 import '../data/demo/demo_forum_repository.dart';
+import '../data/demo/demo_repositories.dart';
 import '../data/demo/demo_session.dart';
+import '../data/repositories/academic_schedule_repository.dart';
 import '../data/repositories/forum_repository.dart';
-import '../data/services/academic_auth_service.dart';
+import '../data/services/academic_account_store.dart';
+import '../data/services/academic_schedule_display_settings_service.dart';
 import '../data/services/app_data_migration_service.dart';
 import '../data/services/client_settings_service.dart';
 import 'app_shell.dart';
 import '../features/onboarding/startup_onboarding.dart';
 import '../shared/theme/shuyo_theme.dart';
+import '../shared/widgets/shuyo_launch_surface.dart';
 
 class ShuYoApp extends StatefulWidget {
   const ShuYoApp({
@@ -39,6 +49,8 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
   ForumRepository? _demoRepository;
   int _academicLoginSignal = 0;
   int _forumLoginSignal = 0;
+  late final Future<bool> _initialScheduleWidgetLaunch;
+  bool _initialWidgetLaunchConsumed = false;
   Brightness _systemBrightness =
       WidgetsBinding.instance.platformDispatcher.platformBrightness;
 
@@ -48,6 +60,7 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
     _manualThemeId = ShuYoThemes.byId(widget.initialThemeId).id;
     _followSystemTheme = widget.initialFollowSystemTheme;
     WidgetsBinding.instance.addObserver(this);
+    _initialScheduleWidgetLaunch = _loadInitialScheduleWidgetLaunch();
     _startupFuture = _loadStartup();
     _loadTheme();
   }
@@ -78,6 +91,13 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
     return MaterialApp(
       title: 'ShuYo',
       debugShowCheckedModeBanner: false,
+      locale: const Locale('zh', 'CN'),
+      supportedLocales: const [Locale('zh', 'CN')],
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+      ],
       theme: theme.themeData(),
       home: FutureBuilder<_StartupData>(
         future: _startupFuture,
@@ -86,7 +106,7 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
             return _StartupError(error: snapshot.error.toString());
           }
           if (!snapshot.hasData) {
-            return _StartupLoading(theme: theme);
+            return ShuYoLaunchSurface(theme: theme);
           }
           final data = snapshot.data!;
           final demo =
@@ -95,6 +115,7 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
           return StartupOnboarding(
             initiallyCompleted: demo || data.onboardingCompleted,
             initialAcademicLoggedIn: demo || data.hasAcademicSession,
+            initialAcademicExpired: !demo && data.academicSessionExpired,
             initialForumStatus: demo
                 ? ForumAccountStatus.loggedIn
                 : _forumAccountStatus(repository),
@@ -112,7 +133,7 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
               reloadRepository: demo
                   ? () async => repository
                   : ForumRepositoryFactory.loadOnline,
-              initialAutoUseWebVpnProxy: demo ? false : data.autoUseWebVpnProxy,
+              initialWebVpnEnabled: demo ? false : data.webVpnEnabled,
               selectedThemeId: theme.id,
               followSystemTheme: _followSystemTheme,
               onThemeChanged: _changeTheme,
@@ -120,6 +141,16 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
               academicLoginSignal: _academicLoginSignal,
               forumLoginSignal: _forumLoginSignal,
               initialHasAcademicSession: demo || data.hasAcademicSession,
+              initialAcademicSessionExpired:
+                  !demo && data.academicSessionExpired,
+              initialAcademicStudentId: demo
+                  ? data.initialScheduleState?.schedule?.term.studentId
+                  : data.academicStudentId,
+              initialOpenSchedule: data.openScheduleFromWidget &&
+                  (demo || data.onboardingCompleted),
+              initialScheduleState: data.initialScheduleState,
+              initialScheduleDisplayState: data.initialScheduleDisplayState,
+              initialScheduleLoadError: data.initialScheduleLoadError,
               isDemo: demo,
               demoData: _demoData,
               onboardingController: _onboardingController,
@@ -139,46 +170,111 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
   }
 
   Future<_StartupData> _loadStartup() async {
+    final openScheduleFromWidget = await _takeInitialScheduleWidgetLaunch();
     if (await DemoSession.isEnabled()) {
-      return _loadDemoStartup();
+      return _loadDemoStartup(
+        openScheduleFromWidget: openScheduleFromWidget,
+      );
     }
     // This must run before any repository/auth service reads local state.  The
     // migration intentionally resets this major release to a fresh install.
     await _dataMigrationService.migrateIfNeeded();
     if (await DemoSession.isEnabled()) {
-      return _loadDemoStartup();
+      return _loadDemoStartup(
+        openScheduleFromWidget: openScheduleFromWidget,
+      );
     }
     await ClientAppInfo.load();
     final networkSettings = await _settingsService.loadNetworkSettings();
     ForumUrlResolver.configure(
-      useWebVpn: networkSettings.autoUseWebVpnProxy,
+      useWebVpn: networkSettings.webVpnEnabled,
     );
-    final repository = await ForumRepositoryFactory.load();
-    final hasAcademicSession = await AcademicAuthService().hasAcademicSession();
+    ClassroomUrlResolver.configure(
+      useWebVpn: networkSettings.webVpnEnabled,
+    );
+    final repository = await ForumRepositoryFactory.loadLocal();
+    final academicAccountStore = AcademicAccountStore();
+    final academicStudentId = await academicAccountStore.loadStudentId();
+    final academicSessionExpired = academicStudentId != null &&
+        await academicAccountStore.isSessionExpired();
     final onboardingCompleted =
         await _settingsService.loadStartupOnboardingCompleted();
+    final initialScheduleLoad = openScheduleFromWidget && onboardingCompleted
+        ? await _loadInitialScheduleState(AcademicScheduleRepository())
+        : const _InitialScheduleLoad();
     return _StartupData(
       repository: repository,
-      autoUseWebVpnProxy: networkSettings.autoUseWebVpnProxy,
-      hasAcademicSession: hasAcademicSession,
+      webVpnEnabled: networkSettings.webVpnEnabled,
+      hasAcademicSession: academicStudentId != null,
+      academicSessionExpired: academicSessionExpired,
+      academicStudentId: academicStudentId,
       onboardingCompleted: onboardingCompleted,
       demoMode: false,
+      openScheduleFromWidget: openScheduleFromWidget,
+      initialScheduleState: initialScheduleLoad.state,
+      initialScheduleDisplayState: initialScheduleLoad.displayState,
+      initialScheduleLoadError: initialScheduleLoad.error,
     );
   }
 
-  Future<_StartupData> _loadDemoStartup() async {
+  Future<_StartupData> _loadDemoStartup({
+    bool openScheduleFromWidget = false,
+  }) async {
     final demoData = await DemoDataBundle.load();
     final demoRepository = await DemoForumRepository.load();
     _demoMode = true;
     _demoData = demoData;
     _demoRepository = demoRepository;
+    final initialScheduleLoad = openScheduleFromWidget
+        ? await _loadInitialScheduleState(
+            DemoAcademicScheduleRepository(demoData.schedule),
+          )
+        : const _InitialScheduleLoad();
     return _StartupData(
       repository: demoRepository,
-      autoUseWebVpnProxy: false,
+      webVpnEnabled: false,
       hasAcademicSession: true,
+      academicSessionExpired: false,
+      academicStudentId: initialScheduleLoad.state?.schedule?.term.studentId,
       onboardingCompleted: true,
       demoMode: true,
+      openScheduleFromWidget: openScheduleFromWidget,
+      initialScheduleState: initialScheduleLoad.state,
+      initialScheduleDisplayState: initialScheduleLoad.displayState,
+      initialScheduleLoadError: initialScheduleLoad.error,
     );
+  }
+
+  Future<_InitialScheduleLoad> _loadInitialScheduleState(
+    AcademicScheduleRepository repository,
+  ) async {
+    try {
+      final scheduleStateFuture = repository.loadCachedState();
+      final displayStateFuture =
+          AcademicScheduleDisplaySettingsService().loadState();
+      return _InitialScheduleLoad(
+        state: await scheduleStateFuture,
+        displayState: await displayStateFuture,
+      );
+    } on Object catch (error) {
+      return _InitialScheduleLoad(error: error.toString());
+    }
+  }
+
+  Future<bool> _loadInitialScheduleWidgetLaunch() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return false;
+    try {
+      final uri = await HomeWidget.initiallyLaunchedFromHomeWidget();
+      return uri?.scheme == 'shuyo' && uri?.host == 'schedule';
+    } on Object {
+      return false;
+    }
+  }
+
+  Future<bool> _takeInitialScheduleWidgetLaunch() async {
+    if (_initialWidgetLaunchConsumed) return false;
+    _initialWidgetLaunchConsumed = true;
+    return _initialScheduleWidgetLaunch;
   }
 
   Future<void> _activateDemoMode() async {
@@ -261,13 +357,13 @@ class _ShuYoAppState extends State<ShuYoApp> with WidgetsBindingObserver {
 }
 
 ForumAccountStatus _forumAccountStatus(ForumRepository repository) {
-  if (!ForumUrlResolver.usesWebVpn && !repository.isOnline) {
+  if (defaultTargetPlatform == TargetPlatform.iOS &&
+      !ForumUrlResolver.usesWebVpn &&
+      !repository.hasLocalAccount) {
     return ForumAccountStatus.directLoginUnavailable;
   }
   return switch (repository.connectionState) {
-    ForumConnectionState.firstUse => ForumUrlResolver.usesWebVpn
-        ? ForumAccountStatus.signedOut
-        : ForumAccountStatus.directLoginUnavailable,
+    ForumConnectionState.firstUse => ForumAccountStatus.signedOut,
     ForumConnectionState.cachedOffline =>
       ForumAccountStatus.connectionUnavailable,
     ForumConnectionState.reauthenticationRequired =>
@@ -279,49 +375,41 @@ ForumAccountStatus _forumAccountStatus(ForumRepository repository) {
 class _StartupData {
   const _StartupData({
     required this.repository,
-    required this.autoUseWebVpnProxy,
+    required this.webVpnEnabled,
     required this.hasAcademicSession,
+    required this.academicSessionExpired,
+    required this.academicStudentId,
     required this.onboardingCompleted,
     required this.demoMode,
+    required this.openScheduleFromWidget,
+    this.initialScheduleState,
+    this.initialScheduleDisplayState,
+    this.initialScheduleLoadError,
   });
 
   final ForumRepository repository;
-  final bool autoUseWebVpnProxy;
+  final bool webVpnEnabled;
   final bool hasAcademicSession;
+  final bool academicSessionExpired;
+  final String? academicStudentId;
   final bool onboardingCompleted;
   final bool demoMode;
+  final bool openScheduleFromWidget;
+  final AcademicScheduleCacheState? initialScheduleState;
+  final AcademicScheduleDisplayState? initialScheduleDisplayState;
+  final String? initialScheduleLoadError;
 }
 
-class _StartupLoading extends StatelessWidget {
-  const _StartupLoading({required this.theme});
+class _InitialScheduleLoad {
+  const _InitialScheduleLoad({
+    this.state,
+    this.displayState,
+    this.error,
+  });
 
-  final ShuYoThemeSpec theme;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: theme.colors.background,
-      body: Center(
-        child: Image.asset(
-          _iconAsset,
-          width: 112,
-          height: 112,
-          fit: BoxFit.contain,
-          filterQuality: FilterQuality.high,
-        ),
-      ),
-    );
-  }
-
-  String get _iconAsset {
-    if (theme.id == ShuYoThemes.defaultId) {
-      return 'assets/images/icon_clear_blue.png';
-    }
-    if (theme.colors.brightness == Brightness.light) {
-      return 'assets/images/icon_clear_black.png';
-    }
-    return 'assets/images/icon_clear.png';
-  }
+  final AcademicScheduleCacheState? state;
+  final AcademicScheduleDisplayState? displayState;
+  final String? error;
 }
 
 class _StartupError extends StatelessWidget {

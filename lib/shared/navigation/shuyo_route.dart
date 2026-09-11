@@ -6,7 +6,20 @@ Route<T> shuyoRoute<T>({
   required WidgetBuilder builder,
   RouteSettings? settings,
   bool fullscreenDialog = false,
+  bool animated = true,
 }) {
+  if (!animated) {
+    return PageRouteBuilder<T>(
+      settings: settings,
+      fullscreenDialog: fullscreenDialog,
+      opaque: true,
+      transitionDuration: Duration.zero,
+      reverseTransitionDuration: Duration.zero,
+      pageBuilder: (context, animation, secondaryAnimation) {
+        return _ShuYoRouteSurface(child: builder(context));
+      },
+    );
+  }
   if (defaultTargetPlatform == TargetPlatform.iOS) {
     return CupertinoPageRoute<T>(
       settings: settings,

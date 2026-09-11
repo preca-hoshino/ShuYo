@@ -52,6 +52,8 @@ class TopicPage extends StatefulWidget {
     this.onReadingTimingSample,
     this.onReadingTimingFlush,
     this.targetPostNumber,
+    this.initialReplyDraftId,
+    this.initialReplyToPostNumber,
     required this.isOnline,
     required this.isSubmittingReply,
     required this.busyLikePostIds,
@@ -90,6 +92,8 @@ class TopicPage extends StatefulWidget {
       onReadingTimingSample;
   final VoidCallback? onReadingTimingFlush;
   final int? targetPostNumber;
+  final String? initialReplyDraftId;
+  final int? initialReplyToPostNumber;
 
   @override
   State<TopicPage> createState() => _TopicPageState();
@@ -318,6 +322,8 @@ class _TopicPageState extends State<TopicPage> with WidgetsBindingObserver {
               isOnline: widget.isOnline,
               isSubmitting: widget.isSubmittingReply,
               detail: detail,
+              initialDraftId: widget.initialReplyDraftId,
+              initialReplyToPostNumber: widget.initialReplyToPostNumber,
               currentUsername: widget.currentUsername,
               onLoginRequired: widget.onLoginRequired,
               onUploadImage: widget.onUploadImage,
@@ -1934,6 +1940,8 @@ class _ReplyBar extends StatefulWidget {
     required this.isOnline,
     required this.isSubmitting,
     required this.detail,
+    this.initialDraftId,
+    this.initialReplyToPostNumber,
     required this.currentUsername,
     required this.onLoginRequired,
     required this.onUploadImage,
@@ -1945,6 +1953,8 @@ class _ReplyBar extends StatefulWidget {
   final bool isOnline;
   final bool isSubmitting;
   final TopicDetail detail;
+  final String? initialDraftId;
+  final int? initialReplyToPostNumber;
   final String currentUsername;
   final VoidCallback onLoginRequired;
   final Future<UploadedImage> Function(PickedImage image) onUploadImage;
@@ -1963,7 +1973,7 @@ class _TopicReplyBarState extends State<_ReplyBar> {
   final _focusNode = FocusNode();
   final _images = <UploadedImage>[];
   Timer? _mentionSearchTimer;
-  Timer? _draftSaveTimer;
+  ForumDraftSession? _draftSession;
   int _mentionSearchSerial = 0;
   _MentionRange? _activeMention;
   List<SearchUserResult> _mentionSuggestions = const [];
@@ -2007,22 +2017,31 @@ class _TopicReplyBarState extends State<_ReplyBar> {
 
   String get _mentionQuery => _activeMention?.query ?? '';
 
-  String get _currentDraftKey {
-    return _draftKeyFor(_replyToPostNumber);
-  }
-
   @override
   void initState() {
     super.initState();
     _focusNode.addListener(_handleFocusChanged);
     _controller.addListener(_handleDraftChanged);
+    if (widget.initialDraftId != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          unawaited(
+            _openComposerFor(
+              widget.initialReplyToPostNumber,
+              requestFocus: true,
+              draftId: widget.initialDraftId,
+            ),
+          );
+        }
+      });
+    }
   }
 
   @override
   void dispose() {
     _mentionSearchTimer?.cancel();
-    _draftSaveTimer?.cancel();
     unawaited(_saveDraftNow());
+    _draftSession?.dispose();
     _focusNode.removeListener(_handleFocusChanged);
     _controller.removeListener(_handleDraftChanged);
     _focusNode.dispose();
@@ -2536,7 +2555,8 @@ class _TopicReplyBarState extends State<_ReplyBar> {
       return;
     }
     final replyToPostNumber = _replyToPostNumber;
-    final draftKey = _draftKeyFor(replyToPostNumber);
+    final session = _draftSession;
+    if (session == null) return;
     final result =
         await Navigator.of(context).push<AdvancedReplyComposerResult>(
       shuyoRoute(
@@ -2546,7 +2566,7 @@ class _TopicReplyBarState extends State<_ReplyBar> {
           initialRaw: _controller.text,
           initialImages: _imagesForMode(),
           replyToPostNumber: replyToPostNumber,
-          draftKey: draftKey,
+          draftSession: session,
           onUploadImage: widget.onUploadImage,
           onSubmit: widget.onSubmit,
         ),
@@ -2556,7 +2576,7 @@ class _TopicReplyBarState extends State<_ReplyBar> {
       return;
     }
     if (result == null) {
-      setState(() => _mode = _ReplyComposerMode.basic);
+      _restoreFromSession(session);
       return;
     }
     if (result.submitted) {
@@ -2622,9 +2642,8 @@ class _TopicReplyBarState extends State<_ReplyBar> {
     }
     final replyToPostNumber = _replyToPostNumber;
     final images = _imagesForMode();
-    final draftKey = _draftKeyFor(replyToPostNumber);
-    setState(() => _submitting = true);
     await _saveDraftNow();
+    setState(() => _submitting = true);
     final success = await widget.onSubmit(
       ReplyDraft(
         topicId: widget.detail.id,
@@ -2639,7 +2658,7 @@ class _TopicReplyBarState extends State<_ReplyBar> {
       return;
     }
     if (success) {
-      await ForumDraftStore.remove(draftKey);
+      await _draftSession?.discard();
       if (!mounted) {
         return;
       }
@@ -2677,12 +2696,36 @@ class _TopicReplyBarState extends State<_ReplyBar> {
   Future<void> _openComposerFor(
     int? replyToPostNumber, {
     required bool requestFocus,
+    String? draftId,
   }) async {
     await _saveDraftNow();
-    final draft = await ForumDraftStore.load(_draftKeyFor(replyToPostNumber));
+    final username = widget.currentUsername;
+    final draft = draftId == null
+        ? await ForumDraftStore.latest(
+            username,
+            type: ForumDraftType.topicReply,
+            topicId: widget.detail.id,
+            replyToPostNumber: replyToPostNumber,
+            matchRootReply: replyToPostNumber == null,
+          )
+        : await ForumDraftStore.loadById(username, draftId);
     if (!mounted) {
       return;
     }
+    _draftSession?.dispose();
+    _draftSession = ForumDraftSession(
+      draft ??
+          ForumComposerDraft(
+            id: ForumDraftStore.createId(),
+            type: ForumDraftType.topicReply,
+            username: username,
+            topicId: widget.detail.id,
+            topicTitle: widget.detail.title,
+            categoryId: widget.detail.categoryId,
+            replyToPostNumber: replyToPostNumber,
+            createdAt: DateTime.now(),
+          ),
+    );
     _restoringDraft = true;
     _controller.text = draft?.raw ?? '';
     setState(() {
@@ -2707,13 +2750,19 @@ class _TopicReplyBarState extends State<_ReplyBar> {
   }
 
   void _scheduleDraftSave() {
-    if (_restoringDraft || _submitting || widget.isSubmitting) {
+    if (_draftSession == null ||
+        _restoringDraft ||
+        _submitting ||
+        widget.isSubmitting) {
       return;
     }
-    _draftSaveTimer?.cancel();
-    _draftSaveTimer = Timer(
-      const Duration(milliseconds: 500),
-      () => unawaited(_saveDraftNow()),
+    _draftSession?.update(
+      _draftSession!.draft.copyWith(
+        raw: _controller.text,
+        replyToPostNumber: _replyToPostNumber,
+        clearReplyToPostNumber: _replyToPostNumber == null,
+        images: List<UploadedImage>.of(_images),
+      ),
     );
   }
 
@@ -2721,22 +2770,26 @@ class _TopicReplyBarState extends State<_ReplyBar> {
     if (_restoringDraft || _submitting || widget.isSubmitting) {
       return;
     }
-    await ForumDraftStore.save(
-      _currentDraftKey,
-      ForumComposerDraft(
-        raw: _controller.text,
-        replyToPostNumber: _replyToPostNumber,
-        images: List<UploadedImage>.of(_images),
-      ),
-    );
+    _scheduleDraftSave();
+    await _draftSession?.flush();
   }
 
-  String _draftKeyFor(int? replyToPostNumber) {
-    return ForumDraftStore.topicReplyKey(
-      username: widget.currentUsername,
-      topicId: widget.detail.id,
-      replyToPostNumber: replyToPostNumber,
-    );
+  void _restoreFromSession(ForumDraftSession session) {
+    final draft = session.draft;
+    _restoringDraft = true;
+    _controller.text = draft.raw;
+    _restoringDraft = false;
+    setState(() {
+      _images
+        ..clear()
+        ..addAll(draft.images);
+      _composerOpen = true;
+      _collapsedForBrowsing = false;
+      _replyToPostNumber = draft.replyToPostNumber;
+      _showEmojiPanel = false;
+      _mode = _ReplyComposerMode.basic;
+      _clearMentionAutocomplete(cancelSearch: true);
+    });
   }
 }
 

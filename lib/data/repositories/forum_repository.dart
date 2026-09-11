@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../../core/forum_constants.dart';
 import '../../core/forum_url_resolver.dart';
+import '../../core/classroom_url_resolver.dart';
 import '../models/category.dart';
 import '../models/common.dart';
 import '../models/composer.dart';
@@ -25,6 +26,7 @@ import '../services/forum_auth_service.dart';
 import '../services/forum_account_snapshot.dart';
 import '../services/forum_image_cache.dart';
 import '../services/html_text.dart';
+import '../services/http_timeout.dart';
 import '../services/payload_factory.dart';
 import '../services/forum_persistent_cache.dart';
 import '../services/sha1_hash.dart';
@@ -50,6 +52,7 @@ enum ForumConnectionState {
 
 enum ForumRecoveryStatus {
   restored,
+  webVpnLoginRequired,
   requiresReauthentication,
   unavailable,
 }
@@ -2305,25 +2308,22 @@ List<ForumCategory> _sortedCategories(Map<int, ForumCategory> categories) {
 class ForumRepositoryFactory {
   const ForumRepositoryFactory._();
 
-  static const _startupOnlineTimeout = Duration(seconds: 5);
-  static const _requiredOnlineTimeout = Duration(seconds: 10);
+  static const _requiredOnlineTimeout = HttpTimeout.normal;
 
-  static Future<ForumRepository> load() async {
+  /// Builds the forum state entirely from bundled fixtures and local caches.
+  /// Startup must never wait for BBS or WebVPN network availability.
+  static Future<ForumRepository> loadLocal() async {
     await _configureForumAccessMode();
     final fixture = await FixtureForumRepository.load();
-    final offline =
-        await OnlineForumRepository.restoreOffline(fallback: fixture);
-    if (offline != null) {
-      return offline;
-    }
-    try {
-      return await OnlineForumRepository.connect(
-        fallback: fixture,
-      ).timeout(_startupOnlineTimeout);
-    } on Object {
-      return fixture;
-    }
+    final offline = await OnlineForumRepository.restoreOffline(
+      fallback: fixture,
+      authService: _LocalForumAuthService(),
+    );
+    return offline ?? fixture;
   }
+
+  @Deprecated('Use loadLocal for local state or loadOnline for a connection')
+  static Future<ForumRepository> load() => loadLocal();
 
   static Future<ForumRepository> loadOnline() async {
     await _configureForumAccessMode();
@@ -2343,7 +2343,18 @@ class ForumRepositoryFactory {
   static Future<void> _configureForumAccessMode() async {
     final settings = await ClientSettingsService().loadNetworkSettings();
     ForumUrlResolver.configure(
-      useWebVpn: settings.autoUseWebVpnProxy,
+      useWebVpn: settings.webVpnEnabled,
+    );
+    ClassroomUrlResolver.configure(
+      useWebVpn: settings.webVpnEnabled,
     );
   }
+}
+
+class _LocalForumAuthService extends ForumAuthService {
+  _LocalForumAuthService()
+      : super(
+          cookieLoader: (_) async => const [],
+          cookieSetter: (_) async {},
+        );
 }

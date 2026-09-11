@@ -34,11 +34,13 @@ class CreateTopicPage extends StatefulWidget {
     required this.repository,
     required this.categories,
     required this.initialCategoryId,
+    this.initialDraftId,
   });
 
   final ForumRepository repository;
   final List<ForumCategory> categories;
   final int? initialCategoryId;
+  final String? initialDraftId;
 
   @override
   State<CreateTopicPage> createState() => _CreateTopicPageState();
@@ -51,7 +53,7 @@ class _CreateTopicPageState extends State<CreateTopicPage> {
   final _rawFocusNode = FocusNode();
   final _openedAt = DateTime.now();
   final _images = <UploadedImage>[];
-  Timer? _draftSaveTimer;
+  ForumDraftSession? _draftSession;
   int? _categoryId;
   bool _submitting = false;
   bool _uploading = false;
@@ -61,11 +63,9 @@ class _CreateTopicPageState extends State<CreateTopicPage> {
   bool _lastTextFocusWasTitle = false;
   bool _draftReady = false;
   bool _restoringDraft = false;
+  bool _allowPop = false;
+  bool _closing = false;
   _TopicComposerMode _mode = _TopicComposerMode.basic;
-
-  String get _draftKey {
-    return ForumDraftStore.newTopicKey(widget.repository.profile.username);
-  }
 
   @override
   void initState() {
@@ -83,8 +83,8 @@ class _CreateTopicPageState extends State<CreateTopicPage> {
 
   @override
   void dispose() {
-    _draftSaveTimer?.cancel();
     unawaited(_saveDraftNow());
+    _draftSession?.dispose();
     _titleController.removeListener(_handleTitleChanged);
     _rawController.removeListener(_handleDraftChanged);
     _titleFocusNode.removeListener(_handleTitleFocusChanged);
@@ -98,34 +98,92 @@ class _CreateTopicPageState extends State<CreateTopicPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: _ComposerModeMenu(
-          mode: _mode,
-          onChanged: _setMode,
-        ),
-        actions: [
-          if (_mode == _TopicComposerMode.advanced)
+    return PopScope(
+      canPop: _allowPop,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) unawaited(_requestClose());
+      },
+      child: Scaffold(
+        resizeToAvoidBottomInset: _mode != _TopicComposerMode.advanced,
+        appBar: AppBar(
+          title: _ComposerModeMenu(
+            mode: _mode,
+            onChanged: _setMode,
+          ),
+          actions: [
+            if (_mode == _TopicComposerMode.advanced)
+              TextButton(
+                onPressed: _submitting ? null : _showPreview,
+                child: const Text('预览'),
+              ),
             TextButton(
-              onPressed: _submitting ? null : _showPreview,
-              child: const Text('预览'),
+              onPressed: _submitting || _uploading ? null : _submit,
+              child: _submitting
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 3),
+                    )
+                  : const Text('发布'),
             ),
+          ],
+        ),
+        body: _mode == _TopicComposerMode.basic
+            ? _basicBody(context)
+            : _advancedBody(context),
+      ),
+    );
+  }
+
+  Future<void> _requestClose() async {
+    if (_closing || _submitting) return;
+    if (_titleController.text.trim().isEmpty &&
+        _rawController.text.trim().isEmpty &&
+        _images.isEmpty) {
+      _draftReady = false;
+      await _draftSession?.discard();
+      if (!mounted) return;
+      if (mounted) setState(() => _allowPop = true);
+      if (mounted) Navigator.of(context).pop();
+      return;
+    }
+    _closing = true;
+    final save = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('保存草稿'),
+        content: const Text('保存后可在草稿箱中继续编辑。'),
+        actions: [
           TextButton(
-            onPressed: _submitting || _uploading ? null : _submit,
-            child: _submitting
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 3),
-                  )
-                : const Text('发布'),
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('舍弃'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('保存'),
           ),
         ],
       ),
-      body: _mode == _TopicComposerMode.basic
-          ? _basicBody(context)
-          : _advancedBody(context),
     );
+    if (!mounted) return;
+    if (save == null) {
+      _closing = false;
+      return;
+    }
+    if (save) {
+      if (_draftSession == null) {
+        _startDraft();
+        _draftReady = true;
+      }
+      await _saveDraftNow();
+    } else {
+      _draftReady = false;
+      await _draftSession?.discard();
+    }
+    if (!mounted) return;
+    _draftReady = false;
+    setState(() => _allowPop = true);
+    Navigator.of(context).pop();
   }
 
   Widget _basicBody(BuildContext context) {
@@ -183,52 +241,86 @@ class _CreateTopicPageState extends State<CreateTopicPage> {
   }
 
   Widget _advancedBody(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+    final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+    final bottomSafeArea = MediaQuery.viewPaddingOf(context).bottom;
+    const horizontalPadding = 16.0;
+    const verticalSpacing = 12.0;
+    const categoryHeight = 56.0;
+    final categoryBottom = 16.0 + bottomSafeArea;
+    final categoryInset = categoryBottom + categoryHeight + verticalSpacing;
+    final keyboardEditorInset = keyboardInset + verticalSpacing;
+    final editorBottom = keyboardEditorInset > categoryInset
+        ? keyboardEditorInset
+        : categoryInset;
+
+    return Stack(
       children: [
-        TextField(
-          controller: _titleController,
-          focusNode: _titleFocusNode,
-          textInputAction: TextInputAction.next,
-          decoration: InputDecoration(
-            labelText: '标题',
-            border: const OutlineInputBorder(),
-            errorText: _titleEmojiRejected
-                ? ForumTitleRules.disallowedEmojiMessage
-                : null,
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            horizontalPadding,
+            12,
+            horizontalPadding,
+            0,
           ),
-        ),
-        const SizedBox(height: 12),
-        AdvancedMarkdownEditor(
-          controller: _rawController,
-          focusNode: _rawFocusNode,
-          enabled: !_submitting,
-          uploading: _uploading,
-          onUploadImage: _pickAndUpload,
-          onPreview: _showPreview,
-          onInsertPoll: _insertPoll,
-          showPreviewInToolbar: false,
-          minLines: 13,
-          maxLines: 28,
-        ),
-        const SizedBox(height: 12),
-        DropdownButtonFormField<int>(
-          initialValue: _categoryId,
-          decoration: const InputDecoration(
-            labelText: '分区',
-            border: OutlineInputBorder(),
-          ),
-          items: [
-            for (final category in widget.categories)
-              DropdownMenuItem(
-                value: category.id,
-                child: Text(category.name),
+          child: Column(
+            children: [
+              TextField(
+                controller: _titleController,
+                focusNode: _titleFocusNode,
+                textInputAction: TextInputAction.next,
+                decoration: InputDecoration(
+                  labelText: '标题',
+                  border: const OutlineInputBorder(),
+                  errorText: _titleEmojiRejected
+                      ? ForumTitleRules.disallowedEmojiMessage
+                      : null,
+                ),
               ),
-          ],
-          onChanged: (value) {
-            setState(() => _categoryId = value);
-            _scheduleDraftSave();
-          },
+              const SizedBox(height: verticalSpacing),
+              Expanded(
+                child: AnimatedPadding(
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeOutCubic,
+                  padding: EdgeInsets.only(bottom: editorBottom),
+                  child: AdvancedMarkdownEditor(
+                    controller: _rawController,
+                    focusNode: _rawFocusNode,
+                    enabled: !_submitting,
+                    uploading: _uploading,
+                    onUploadImage: _pickAndUpload,
+                    onPreview: _showPreview,
+                    onInsertPoll: _insertPoll,
+                    showPreviewInToolbar: false,
+                    expands: true,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Positioned(
+          left: horizontalPadding,
+          right: horizontalPadding,
+          bottom: categoryBottom,
+          height: categoryHeight,
+          child: DropdownButtonFormField<int>(
+            initialValue: _categoryId,
+            decoration: const InputDecoration(
+              labelText: '分区',
+              border: OutlineInputBorder(),
+            ),
+            items: [
+              for (final category in widget.categories)
+                DropdownMenuItem(
+                  value: category.id,
+                  child: Text(category.name),
+                ),
+            ],
+            onChanged: (value) {
+              setState(() => _categoryId = value);
+              _scheduleDraftSave();
+            },
+          ),
         ),
       ],
     );
@@ -474,8 +566,10 @@ class _CreateTopicPageState extends State<CreateTopicPage> {
       return;
     }
 
-    setState(() => _submitting = true);
     try {
+      await _saveDraftNow();
+      if (!mounted) return;
+      setState(() => _submitting = true);
       final post = await widget.repository.createTopic(
         CreateTopicDraft(
           title: title,
@@ -490,7 +584,7 @@ class _CreateTopicPageState extends State<CreateTopicPage> {
       if (!mounted) {
         return;
       }
-      await ForumDraftStore.remove(_draftKey);
+      await _draftSession?.discard();
       if (!mounted) {
         return;
       }
@@ -582,12 +676,28 @@ class _CreateTopicPageState extends State<CreateTopicPage> {
   }
 
   Future<void> _loadDraft() async {
-    final draft = await ForumDraftStore.load(_draftKey);
+    final username = widget.repository.profile.username;
+    final requestedId = widget.initialDraftId;
+    final draft = requestedId == null
+        ? await ForumDraftStore.latest(
+            username,
+            type: ForumDraftType.newTopic,
+          )
+        : await ForumDraftStore.loadById(username, requestedId);
     if (!mounted) {
       return;
     }
     if (draft == null) {
+      _startDraft();
       _draftReady = true;
+      setState(() {});
+      return;
+    }
+    if (requestedId != null) {
+      _startDraft(draft);
+      _restoreDraft(draft);
+      _draftReady = true;
+      setState(() {});
       return;
     }
     final shouldRestore = await showDialog<bool>(
@@ -599,7 +709,7 @@ class _CreateTopicPageState extends State<CreateTopicPage> {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('丢弃'),
+              child: const Text('新建'),
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(true),
@@ -613,12 +723,30 @@ class _CreateTopicPageState extends State<CreateTopicPage> {
       return;
     }
     if (shouldRestore == true) {
+      _startDraft(draft);
       _restoreDraft(draft);
       _draftReady = true;
+      setState(() {});
       return;
     }
-    await ForumDraftStore.remove(_draftKey);
+    _startDraft();
     _draftReady = true;
+    setState(() {});
+  }
+
+  void _startDraft([ForumComposerDraft? draft]) {
+    final username = widget.repository.profile.username;
+    _draftSession?.dispose();
+    _draftSession = ForumDraftSession(
+      draft ??
+          ForumComposerDraft(
+            id: ForumDraftStore.createId(),
+            type: ForumDraftType.newTopic,
+            username: username,
+            categoryId: _categoryId,
+            createdAt: DateTime.now(),
+          ),
+    );
   }
 
   void _restoreDraft(ForumComposerDraft draft) {
@@ -648,10 +776,13 @@ class _CreateTopicPageState extends State<CreateTopicPage> {
     if (!_draftReady || _restoringDraft || _submitting) {
       return;
     }
-    _draftSaveTimer?.cancel();
-    _draftSaveTimer = Timer(
-      const Duration(milliseconds: 700),
-      () => unawaited(_saveDraftNow()),
+    _draftSession?.update(
+      _draftSession!.draft.copyWith(
+        title: _titleController.text,
+        raw: _rawController.text,
+        categoryId: _categoryId,
+        images: List<UploadedImage>.of(_images),
+      ),
     );
   }
 
@@ -659,15 +790,8 @@ class _CreateTopicPageState extends State<CreateTopicPage> {
     if (!_draftReady || _restoringDraft || _submitting) {
       return;
     }
-    await ForumDraftStore.save(
-      _draftKey,
-      ForumComposerDraft(
-        title: _titleController.text,
-        raw: _rawController.text,
-        categoryId: _categoryId,
-        images: List<UploadedImage>.of(_images),
-      ),
-    );
+    _scheduleDraftSave();
+    await _draftSession?.flush();
   }
 }
 

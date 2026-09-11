@@ -1,5 +1,6 @@
-import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
+
+import 'package:shared_preferences/shared_preferences.dart';
 
 class AcademicScheduleDisplaySettings {
   const AcademicScheduleDisplaySettings({
@@ -21,6 +22,16 @@ class AcademicScheduleDisplaySettings {
   }
 }
 
+class AcademicScheduleDisplayState {
+  const AcademicScheduleDisplayState({
+    required this.settings,
+    required this.courseColorValues,
+  });
+
+  final AcademicScheduleDisplaySettings settings;
+  final Map<String, int> courseColorValues;
+}
+
 class AcademicScheduleDisplaySettingsService {
   AcademicScheduleDisplaySettingsService({
     Future<SharedPreferences> Function()? preferencesLoader,
@@ -32,8 +43,22 @@ class AcademicScheduleDisplaySettingsService {
 
   final Future<SharedPreferences> Function() _preferencesLoader;
 
+  Future<AcademicScheduleDisplayState> loadState() async {
+    final prefs = await _preferencesLoader();
+    return AcademicScheduleDisplayState(
+      settings: _settingsFromPreferences(prefs),
+      courseColorValues: _courseColorsFromPreferences(prefs),
+    );
+  }
+
   Future<AcademicScheduleDisplaySettings> loadSettings() async {
     final prefs = await _preferencesLoader();
+    return _settingsFromPreferences(prefs);
+  }
+
+  AcademicScheduleDisplaySettings _settingsFromPreferences(
+    SharedPreferences prefs,
+  ) {
     return AcademicScheduleDisplaySettings(
       colorful: prefs.getBool(_colorfulKey) ?? false,
       showTeacher: prefs.getBool(_showTeacherKey) ?? false,
@@ -51,6 +76,10 @@ class AcademicScheduleDisplaySettingsService {
 
   Future<Map<String, int>> loadCourseColors() async {
     final prefs = await _preferencesLoader();
+    return _courseColorsFromPreferences(prefs);
+  }
+
+  Map<String, int> _courseColorsFromPreferences(SharedPreferences prefs) {
     final raw = prefs.getString(_courseColorsKey);
     if (raw == null || raw.isEmpty) {
       return <String, int>{};

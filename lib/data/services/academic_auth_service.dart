@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
@@ -9,6 +10,7 @@ import '../../core/academic_constants.dart';
 import '../../core/academic_url_resolver.dart';
 import '../../core/client_user_agent.dart';
 import '../../core/forum_url_resolver.dart';
+import 'http_timeout.dart';
 
 enum WebVpnSessionStatus { valid, loginRequired, unavailable }
 
@@ -55,20 +57,12 @@ class AcademicAuthService {
       _directSessionValidator;
 
   Future<Set<String>> clearCookies() async {
-    // These shared authentication cookies may only exist in the persisted
-    // native cache after a partial WebView restore, so remove them from the
-    // forum store even when the live cookie query returns nothing.
-    final clearedSharedNames = <String>{'webvpn-token', 'SHU_OAUTH2'};
+    // Academic logout only owns the direct jwxt session. WebVPN and forum
+    // sessions are independent and must survive this operation.
+    final clearedSharedNames = <String>{};
     final domains = <(Uri, bool)>[
-      (Uri.parse(ForumUrlResolver.webVpnPortalUrl), true),
       (Uri.parse(AcademicConstants.baseUrl), false),
-      (Uri.parse(AcademicUrlResolver.webVpnBaseUrl), false),
-      (Uri.parse('https://oauth.shu.edu.cn'), true),
-      (Uri.parse('https://https-oauth-shu-edu-cn-443.webvpn.shu.edu.cn'), true),
-      (
-        Uri.parse('https://https-newsso-shu-edu-cn-443.webvpn.shu.edu.cn'),
-        true
-      ),
+      (Uri.parse('${AcademicConstants.baseUrl}/jwglxt/'), false),
     ];
     final prefs = await _preferencesLoader();
     // Record the user's intent before touching the WebView. Cookie deletion
@@ -101,10 +95,20 @@ class AcademicAuthService {
     }
     await Future.wait([
       prefs.remove(_cachedDirectCookiesKey),
-      prefs.remove(_cachedWebVpnCookiesKey),
       prefs.setBool(_explicitlySignedOutKey, true),
     ]);
     return clearedSharedNames;
+  }
+
+  /// Drops cookies persisted by a previous campus session before a fresh
+  /// authentication callback is installed. Unlike [clearCookies], this does
+  /// not mark the user as signed out or touch the cached schedule.
+  Future<void> clearCachedCookiesForReauthentication() async {
+    final prefs = await _preferencesLoader();
+    await Future.wait([
+      prefs.remove(_cachedDirectCookiesKey),
+    ]);
+    _debug('cleared cached cookies for reauthentication');
   }
 
   /// Clears the persistent logout marker after a user completes login.
@@ -134,7 +138,7 @@ class AcademicAuthService {
     final status = AcademicUrlResolver.usesWebVpn
         ? await validateWebVpnSession()
         : await validateDirectAcademicSession();
-    return status != WebVpnSessionStatus.loginRequired;
+    return status == WebVpnSessionStatus.valid;
   }
 
   Future<WebVpnSessionStatus> validateDirectAcademicSession() async {
@@ -153,7 +157,7 @@ class AcademicAuthService {
         .join('; ');
     if (header.isEmpty) return WebVpnSessionStatus.loginRequired;
     return _directSessionValidator(header).timeout(
-      const Duration(seconds: 15),
+      HttpTimeout.normal,
       onTimeout: () => WebVpnSessionStatus.unavailable,
     );
   }
@@ -161,12 +165,16 @@ class AcademicAuthService {
   Future<WebVpnSessionStatus> _validateDirectAcademicSessionOverNetwork(
     String cookieHeader,
   ) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+    final client = HttpClient()..connectionTimeout = HttpTimeout.connect;
+    final deadline = Timer(
+      HttpTimeout.normal,
+      () => client.close(force: true),
+    );
     var current = AcademicUrlResolver.homeUri;
     try {
       for (var redirectCount = 0; redirectCount < 10; redirectCount++) {
         final request = await client.getUrl(current).timeout(
-              const Duration(seconds: 5),
+              HttpTimeout.connect,
             );
         request.followRedirects = false;
         request.headers
@@ -177,12 +185,15 @@ class AcademicAuthService {
         if (current.host == AcademicConstants.host) {
           request.headers.set(HttpHeaders.cookieHeader, cookieHeader);
         }
-        final response = await request.close().timeout(
-              const Duration(seconds: 7),
-            );
+        final response = await request.close().timeout(HttpTimeout.normal);
         final location = response.headers.value(HttpHeaders.locationHeader);
         final statusCode = response.statusCode;
-        await response.drain<void>().timeout(const Duration(seconds: 7));
+        await response.drain<void>().timeout(HttpTimeout.normal);
+        _debug(
+          'direct validation hop=$redirectCount status=$statusCode '
+          'uri=${_describeUri(current)} '
+          'location=${_describeLocation(current, location)}',
+        );
         if (statusCode >= 300 && statusCode < 400 && location != null) {
           final next = current.resolve(location);
           if (!_isAllowedAcademicHost(next.host)) {
@@ -206,17 +217,23 @@ class AcademicAuthService {
         return WebVpnSessionStatus.unavailable;
       }
       return WebVpnSessionStatus.unavailable;
-    } on TimeoutException {
+    } on TimeoutException catch (error) {
+      _debug('direct validation failed: $error');
       return WebVpnSessionStatus.unavailable;
-    } on SocketException {
+    } on SocketException catch (error) {
+      _debug('direct validation failed: $error');
       return WebVpnSessionStatus.unavailable;
-    } on HandshakeException {
+    } on HandshakeException catch (error) {
+      _debug('direct validation failed: $error');
       return WebVpnSessionStatus.unavailable;
-    } on HttpException {
+    } on HttpException catch (error) {
+      _debug('direct validation failed: $error');
       return WebVpnSessionStatus.unavailable;
-    } on Object {
+    } on Object catch (error) {
+      _debug('direct validation failed: ${error.runtimeType}');
       return WebVpnSessionStatus.unavailable;
     } finally {
+      deadline.cancel();
       client.close(force: true);
     }
   }
@@ -227,9 +244,6 @@ class AcademicAuthService {
   }
 
   Future<WebVpnSessionStatus> validateWebVpnSession() async {
-    if (await _isExplicitlySignedOut()) {
-      return WebVpnSessionStatus.loginRequired;
-    }
     final cached = await _loadCachedCookies(webVpn: true);
     final live = await _loadLiveCookies(webVpn: true);
     final merged = _mergeCookieGroups(cached, live);
@@ -239,36 +253,60 @@ class AcademicAuthService {
           (cookie) => cookie.name == 'webvpn-token' && cookie.value.isNotEmpty,
         ) ==
         true;
-    if (!hasToken) return WebVpnSessionStatus.loginRequired;
+    if (!hasToken) {
+      _debug(
+        'session validation: missing portal webvpn-token '
+        '${_describeCookieSources(cached: cached, live: live)}',
+      );
+      return WebVpnSessionStatus.loginRequired;
+    }
     final header = (merged[_portalGroup] ?? const <WebViewCookie>[])
         .where((cookie) => cookie.name.isNotEmpty && cookie.value.isNotEmpty)
         .map((cookie) => '${cookie.name}=${cookie.value}')
         .join('; ');
-    if (header.isEmpty) return WebVpnSessionStatus.loginRequired;
-    return _webVpnSessionValidator(header);
+    if (header.isEmpty) {
+      _debug('session validation: empty portal cookie header');
+      return WebVpnSessionStatus.loginRequired;
+    }
+    final status = await _webVpnSessionValidator(header).timeout(
+      HttpTimeout.normal,
+      onTimeout: () => WebVpnSessionStatus.unavailable,
+    );
+    _debug(
+      'session validation=${status.name} '
+      '${_describeCookieSources(cached: cached, live: live)}',
+    );
+    return status;
   }
 
   Future<WebVpnSessionStatus> _validateWebVpnSessionOverNetwork(
     String cookieHeader,
   ) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+    final client = HttpClient()..connectionTimeout = HttpTimeout.connect;
+    final deadline = Timer(
+      HttpTimeout.normal,
+      () => client.close(force: true),
+    );
     var current = Uri.parse('${ForumUrlResolver.webVpnBaseUrl}/latest');
     try {
       for (var redirectCount = 0; redirectCount < 10; redirectCount++) {
         final request = await client.getUrl(current).timeout(
-              const Duration(seconds: 5),
+              HttpTimeout.connect,
             );
         request.followRedirects = false;
         request.headers
           ..set(HttpHeaders.acceptHeader, 'text/html,application/xhtml+xml')
           ..set(HttpHeaders.userAgentHeader, ClientUserAgent.mobileBrowser)
           ..set(HttpHeaders.cookieHeader, cookieHeader);
-        final response = await request.close().timeout(
-              const Duration(seconds: 7),
-            );
+        final response = await request.close().timeout(HttpTimeout.normal);
         final location = response.headers.value(HttpHeaders.locationHeader);
         final statusCode = response.statusCode;
-        await response.drain<void>().timeout(const Duration(seconds: 7));
+        await response.drain<void>().timeout(HttpTimeout.normal);
+        _debug(
+          'webvpn validation hop=$redirectCount status=$statusCode '
+          'uri=${_describeUri(current)} '
+          'location=${_describeLocation(current, location)}',
+        );
         if (statusCode >= 300 && statusCode < 400 && location != null) {
           current = current.resolve(location);
           continue;
@@ -284,17 +322,23 @@ class AcademicAuthService {
         return WebVpnSessionStatus.unavailable;
       }
       return WebVpnSessionStatus.unavailable;
-    } on TimeoutException {
+    } on TimeoutException catch (error) {
+      _debug('webvpn validation failed: $error');
       return WebVpnSessionStatus.unavailable;
-    } on SocketException {
+    } on SocketException catch (error) {
+      _debug('webvpn validation failed: $error');
       return WebVpnSessionStatus.unavailable;
-    } on HandshakeException {
+    } on HandshakeException catch (error) {
+      _debug('webvpn validation failed: $error');
       return WebVpnSessionStatus.unavailable;
-    } on HttpException {
+    } on HttpException catch (error) {
+      _debug('webvpn validation failed: $error');
       return WebVpnSessionStatus.unavailable;
-    } on Object {
+    } on Object catch (error) {
+      _debug('webvpn validation failed: ${error.runtimeType}');
       return WebVpnSessionStatus.unavailable;
     } finally {
+      deadline.cancel();
       client.close(force: true);
     }
   }
@@ -341,7 +385,25 @@ class AcademicAuthService {
         }
       }
     }
-    if (values.isEmpty) return null;
+    final target = targetUri == null ? '-' : _describeUri(targetUri);
+    if (values.isEmpty) {
+      _debug(
+        'cookie selection target=$target selected=[] '
+        '${_describeCookieSources(cached: cached, live: live)}',
+      );
+      return null;
+    }
+    final selected = values.values
+        .map(
+          (candidate) =>
+              '${candidate.cookie.name}@${candidate.cookie.domain}${candidate.cookie.path}',
+        )
+        .toList()
+      ..sort();
+    _debug(
+      'cookie selection target=$target selected=$selected '
+      '${_describeCookieSources(cached: cached, live: live)}',
+    );
     await markLoggedIn();
     return values.entries
         .map((entry) => '${entry.key}=${entry.value.cookie.value}')
@@ -377,7 +439,12 @@ class AcademicAuthService {
             Uri.parse(AcademicConstants.baseUrl),
             Uri.parse('${AcademicConstants.baseUrl}/jwglxt/'),
           ]
-        : <Uri>[Uri.parse(AcademicConstants.baseUrl)];
+        : <Uri>[
+            Uri.parse(AcademicConstants.baseUrl),
+            Uri.parse('${AcademicConstants.baseUrl}/jwglxt/'),
+            AcademicUrlResolver.homeUri,
+            AcademicUrlResolver.scheduleIndexUri,
+          ];
     final academicCookies = <WebViewCookie>[];
     for (final domain in academicDomains) {
       academicCookies.addAll(await _cookiesFor(domain));
@@ -399,8 +466,18 @@ class AcademicAuthService {
             ),
           )
           .toList();
+      final cookies = loaded
+          .map((cookie) => '${cookie.name}@${cookie.domain}${cookie.path}')
+          .toList()
+        ..sort();
+      _debug(
+          'webview cookie read domain=${_describeUri(domain)} cookies=$cookies');
       return loaded;
-    } on Object {
+    } on Object catch (error) {
+      _debug(
+        'webview cookie read failed domain=${_describeUri(domain)} '
+        'error=${error.runtimeType}',
+      );
       return const [];
     }
   }
@@ -472,10 +549,16 @@ class AcademicAuthService {
     final groups = <String, List<WebViewCookie>>{};
     for (final group in {...cached.keys, ...live.keys}) {
       final values = <String, WebViewCookie>{};
+      final liveCookies = live[group] ?? const <WebViewCookie>[];
+      final liveNames = liveCookies.map((cookie) => cookie.name).toSet();
       for (final cookie in cached[group] ?? const <WebViewCookie>[]) {
+        // Once WebView exposes a cookie name for this service, its live values
+        // are authoritative across all scopes. Keeping an older, more-specific
+        // cached path can otherwise make it win request selection after login.
+        if (liveNames.contains(cookie.name)) continue;
         values[_cookieKey(cookie)] = cookie;
       }
-      for (final cookie in live[group] ?? const <WebViewCookie>[]) {
+      for (final cookie in liveCookies) {
         values[_cookieKey(cookie)] = cookie;
       }
       if (values.isNotEmpty) groups[group] = values.values.toList();
@@ -525,6 +608,43 @@ class AcademicAuthService {
 
   String _cacheKey(bool webVpn) =>
       webVpn ? _cachedWebVpnCookiesKey : _cachedDirectCookiesKey;
+
+  String _describeCookieSources({
+    required Map<String, List<WebViewCookie>> cached,
+    required Map<String, List<WebViewCookie>> live,
+  }) {
+    String describe(Map<String, List<WebViewCookie>> groups) {
+      final result = <String>[];
+      for (final entry in groups.entries) {
+        final names = entry.value.map((cookie) => cookie.name).toSet().toList()
+          ..sort();
+        result.add('${entry.key}:$names');
+      }
+      result.sort();
+      return result.toString();
+    }
+
+    return 'cached=${describe(cached)} live=${describe(live)}';
+  }
+
+  String _describeUri(Uri uri) {
+    final queryKeys = uri.queryParameters.keys.toList()..sort();
+    return '${uri.host}${uri.path}'
+        '${queryKeys.isEmpty ? '' : ' queryKeys=$queryKeys'}';
+  }
+
+  String _describeLocation(Uri current, String? location) {
+    if (location == null || location.isEmpty) return '-';
+    try {
+      return _describeUri(current.resolve(location));
+    } on Object {
+      return '<invalid>';
+    }
+  }
+
+  void _debug(String message) {
+    if (kDebugMode) debugPrint('[SHU_ACADEMIC_AUTH] $message');
+  }
 }
 
 class _CookieCandidate {

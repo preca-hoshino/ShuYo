@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shuyo/data/models/client_backend.dart';
 import 'package:shuyo/features/onboarding/startup_onboarding.dart';
 import 'package:shuyo/features/auth/native_login_page.dart';
 
@@ -10,6 +11,7 @@ void main() {
   Widget app({
     required bool completed,
     bool academicLoggedIn = false,
+    bool academicExpired = false,
     ForumAccountStatus forumStatus = ForumAccountStatus.signedOut,
     StartupOnboardingController? controller,
     Future<bool> Function()? onAcademicLogout,
@@ -20,6 +22,7 @@ void main() {
       home: StartupOnboarding(
         initiallyCompleted: completed,
         initialAcademicLoggedIn: academicLoggedIn,
+        initialAcademicExpired: academicExpired,
         initialForumStatus: forumStatus,
         onAcademicLoginCompleted: () {},
         onForumLoginCompleted: () {},
@@ -58,7 +61,7 @@ void main() {
     );
   });
 
-  testWidgets('dismisses onboarding from the barrier without completing it',
+  testWidgets('does not dismiss first-run onboarding from the barrier',
       (tester) async {
     await tester.pumpWidget(app(completed: false));
     await tester.pumpAndSettle();
@@ -66,7 +69,7 @@ void main() {
     await tester.tapAt(const Offset(16, 16));
     await tester.pumpAndSettle();
 
-    expect(find.text('欢迎使用ShuYo'), findsNothing);
+    expect(find.text('欢迎使用ShuYo'), findsOneWidget);
     expect(find.text('主页'), findsOneWidget);
     expect(
       (await SharedPreferences.getInstance()).containsKey(
@@ -76,7 +79,7 @@ void main() {
     );
   });
 
-  testWidgets('dismisses onboarding by dragging the top handle down',
+  testWidgets('does not dismiss first-run onboarding by dragging the handle',
       (tester) async {
     await tester.pumpWidget(app(completed: false));
     await tester.pumpAndSettle();
@@ -87,7 +90,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('欢迎使用ShuYo'), findsNothing);
+    expect(find.text('欢迎使用ShuYo'), findsOneWidget);
     expect(find.text('主页'), findsOneWidget);
   });
 
@@ -98,7 +101,7 @@ void main() {
     expect(find.text('欢迎使用ShuYo'), findsNothing);
   });
 
-  testWidgets('third page shows account actions and allows forum skip',
+  testWidgets('first-run account page only exposes the academic account',
       (tester) async {
     await tester.pumpWidget(app(completed: false, academicLoggedIn: true));
     await tester.pumpAndSettle();
@@ -109,74 +112,31 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('上大校园账户'), findsOneWidget);
-    expect(find.text('乐乎账户'), findsOneWidget);
-    expect(find.text('跳过'), findsOneWidget);
-
-    await tester.tap(find.text('跳过'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('主页'), findsOneWidget);
-    expect(
-      (await SharedPreferences.getInstance()).getBool(
-        'client.onboarding.startup.completed',
-      ),
-      isTrue,
-    );
-  });
-
-  testWidgets('shows an inline campus account hint before forum login',
-      (tester) async {
-    final controller = StartupOnboardingController();
-    await tester.pumpWidget(app(completed: false, controller: controller));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('继续'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('继续'));
-    await tester.pumpAndSettle();
-    expect(find.text('请先登录上大校园账户'), findsNothing);
-
-    await tester.tap(find.text('乐乎账户'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 110));
-
-    expect(find.text('请先登录上大校园账户'), findsOneWidget);
-    expect(find.byType(SnackBar), findsNothing);
-    final hint = find.byKey(const ValueKey('forum-campus-account-hint'));
-    final fade = tester.widget<FadeTransition>(
-      find.ancestor(of: hint, matching: find.byType(FadeTransition)).first,
-    );
-    expect(fade.opacity.value, greaterThan(0));
-    expect(fade.opacity.value, lessThan(1));
-
-    controller.updateAccountStatus(
-      academicLoggedIn: true,
-      forumStatus: ForumAccountStatus.signedOut,
-    );
-    await tester.pumpAndSettle();
-    expect(find.text('请先登录上大校园账户'), findsNothing);
+    expect(find.text('乐乎账户'), findsNothing);
+    expect(find.text('使用WebVPN连接'), findsNothing);
+    expect(find.text('跳过'), findsNothing);
   });
 
   testWidgets('blocks direct forum login with certificate notice',
       (tester) async {
-    await tester.pumpWidget(
-      app(
-        completed: false,
-        academicLoggedIn: true,
-        forumStatus: ForumAccountStatus.directLoginUnavailable,
-      ),
+    final controller = StartupOnboardingController();
+    await tester.pumpWidget(app(
+      completed: true,
+      academicLoggedIn: true,
+      forumStatus: ForumAccountStatus.directLoginUnavailable,
+      controller: controller,
+    ));
+    controller.openAccountManager(
+      academicLoggedIn: true,
+      forumStatus: ForumAccountStatus.directLoginUnavailable,
     );
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('继续'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('继续'));
     await tester.pumpAndSettle();
 
     expect(find.text('暂不可登录'), findsOneWidget);
     await tester.tap(find.text('乐乎账户'));
     await tester.pumpAndSettle();
     expect(
-      find.text('暂时无法直连登录校园论坛，信息办未续论坛证书'),
+      find.text('iOS暂时仅支持开启webvpn访问'),
       findsOneWidget,
     );
     expect(find.byType(NativeLoginPage), findsNothing);
@@ -275,6 +235,111 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('主页'), findsOneWidget);
     expect(find.text('登录'), findsNothing);
+  });
+
+  testWidgets('account manager distinguishes an expired academic session',
+      (tester) async {
+    final controller = StartupOnboardingController();
+    await tester.pumpWidget(app(
+      completed: true,
+      academicLoggedIn: true,
+      academicExpired: true,
+      controller: controller,
+    ));
+    controller.openAccountManager(
+      academicLoggedIn: true,
+      academicExpired: true,
+      forumStatus: ForumAccountStatus.signedOut,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('上大校园账户'), findsOneWidget);
+    expect(find.text('已过期'), findsOneWidget);
+    expect(find.text('已登录'), findsNothing);
+  });
+
+  testWidgets('account manager shows persistent WebVPN controls and status',
+      (tester) async {
+    final controller = StartupOnboardingController();
+    await tester.pumpWidget(app(
+      completed: true,
+      academicLoggedIn: true,
+      controller: controller,
+    ));
+    controller.openAccountManager(
+      academicLoggedIn: true,
+      forumStatus: ForumAccountStatus.signedOut,
+      webVpnEnabled: true,
+      webVpnServiceStatus: WebVpnServiceStatus(
+        state: WebVpnServiceState.available,
+        checkedAt: DateTime.now(),
+        statusSince: null,
+        lastSuccessAt: null,
+        latencyMs: 20,
+        reason: 'ok',
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('使用WebVPN连接'), findsOneWidget);
+    await tester.ensureVisible(find.text('使用WebVPN连接'));
+    await tester.tap(find.text('使用WebVPN连接'));
+    await tester.pumpAndSettle();
+    expect(find.text('当前WebVPN服务可用'), findsOneWidget);
+    expect(find.textContaining('最近检查：'), findsOneWidget);
+    expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
+
+    await tester.ensureVisible(find.byType(Switch));
+    await tester.tap(find.byType(Switch));
+    await tester.pumpAndSettle();
+    expect(find.text('关闭后需重新登录论坛账户'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, '取消'));
+    await tester.pumpAndSettle();
+    expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
+  });
+
+  testWidgets('enabling WebVPN confirms when the direct forum is logged in',
+      (tester) async {
+    final controller = StartupOnboardingController();
+    var changeRequested = false;
+    controller.setWebVpnChangeHandler((enabled) async {
+      changeRequested = true;
+      return true;
+    });
+    await tester.pumpWidget(app(
+      completed: true,
+      academicLoggedIn: true,
+      forumStatus: ForumAccountStatus.loggedIn,
+      controller: controller,
+    ));
+    controller.openAccountManager(
+      academicLoggedIn: true,
+      forumStatus: ForumAccountStatus.loggedIn,
+    );
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.text('使用WebVPN连接'));
+    await tester.tap(find.text('使用WebVPN连接'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byType(Switch));
+    await tester.tap(find.byType(Switch));
+    await tester.pumpAndSettle();
+
+    expect(find.text('开启WebVPN连接'), findsOneWidget);
+    expect(find.text('开启后需要重新登录论坛账户'), findsOneWidget);
+    expect(changeRequested, isFalse);
+
+    await tester.tap(find.widgetWithText(TextButton, '取消'));
+    await tester.pumpAndSettle();
+    expect(changeRequested, isFalse);
+    expect(tester.widget<Switch>(find.byType(Switch)).value, isFalse);
+
+    await tester.tap(find.byType(Switch));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '继续'));
+    await tester.pumpAndSettle();
+    expect(changeRequested, isTrue);
+    expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
   });
 
   testWidgets('keeps forum account status synchronized while manager is open',

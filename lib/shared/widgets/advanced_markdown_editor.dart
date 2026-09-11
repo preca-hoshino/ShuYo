@@ -20,6 +20,8 @@ class AdvancedMarkdownEditor extends StatelessWidget {
     this.hintText = '正文',
     this.minLines = 12,
     this.maxLines = 24,
+    this.expands = false,
+    this.scrollController,
   });
 
   final TextEditingController controller;
@@ -33,6 +35,8 @@ class AdvancedMarkdownEditor extends StatelessWidget {
   final String hintText;
   final int minLines;
   final int maxLines;
+  final bool expands;
+  final ScrollController? scrollController;
 
   @override
   Widget build(BuildContext context) {
@@ -45,7 +49,7 @@ class AdvancedMarkdownEditor extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(8),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          mainAxisSize: expands ? MainAxisSize.max : MainAxisSize.min,
           children: [
             _MarkdownToolbar(
               enabled: enabled,
@@ -58,28 +62,38 @@ class AdvancedMarkdownEditor extends StatelessWidget {
               showPreview: showPreviewInToolbar,
             ),
             Divider(height: 1, color: colors.border),
-            TextField(
-              controller: controller,
-              focusNode: focusNode,
-              enabled: enabled,
-              minLines: minLines,
-              maxLines: maxLines,
-              keyboardType: TextInputType.multiline,
-              textInputAction: TextInputAction.newline,
-              decoration: InputDecoration(
-                hintText: hintText,
-                border: InputBorder.none,
-                enabledBorder: InputBorder.none,
-                focusedBorder: InputBorder.none,
-                disabledBorder: InputBorder.none,
-                errorBorder: InputBorder.none,
-                focusedErrorBorder: InputBorder.none,
-                isDense: true,
-                contentPadding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-              ),
-            ),
+            if (expands)
+              Expanded(child: _buildTextField())
+            else
+              _buildTextField(),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildTextField() {
+    return TextField(
+      controller: controller,
+      focusNode: focusNode,
+      enabled: enabled,
+      scrollController: scrollController,
+      expands: expands,
+      minLines: expands ? null : minLines,
+      maxLines: expands ? null : maxLines,
+      keyboardType: TextInputType.multiline,
+      textInputAction: TextInputAction.newline,
+      textAlignVertical: TextAlignVertical.top,
+      decoration: InputDecoration(
+        hintText: hintText,
+        border: InputBorder.none,
+        enabledBorder: InputBorder.none,
+        focusedBorder: InputBorder.none,
+        disabledBorder: InputBorder.none,
+        errorBorder: InputBorder.none,
+        focusedErrorBorder: InputBorder.none,
+        isDense: true,
+        contentPadding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
       ),
     );
   }

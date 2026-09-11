@@ -24,8 +24,7 @@ void main() {
 
   setUp(() {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-    FlutterLocalNotificationsPlatform.instance =
-        _StubNotificationsPlatform();
+    FlutterLocalNotificationsPlatform.instance = _StubNotificationsPlatform();
     SharedPreferences.setMockInitialValues({});
     syncedAlarms = [];
     methodCalls = [];
@@ -175,6 +174,9 @@ class _UnusedAcademicScheduleApiClient extends AcademicScheduleApiClient {
 }
 
 class _FakeAcademicAuthService implements AcademicAuthService {
+  @override
+  Future<void> clearCachedCookiesForReauthentication() async {}
+
   @override
   Future<Set<String>> clearCookies() async => {};
 

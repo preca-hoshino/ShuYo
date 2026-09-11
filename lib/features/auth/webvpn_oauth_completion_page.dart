@@ -8,6 +8,7 @@ import 'package:webview_flutter_android/webview_flutter_android.dart';
 import '../../core/academic_constants.dart';
 import '../../core/academic_url_resolver.dart';
 import '../../core/client_user_agent.dart';
+import '../../data/services/http_timeout.dart';
 
 @visibleForTesting
 bool hasWebVpnNavigationProgressed(String? failedUrl, String? currentUrl) {
@@ -27,9 +28,11 @@ class WebVpnOAuthCompletionPage extends StatefulWidget {
   const WebVpnOAuthCompletionPage({
     super.key,
     required this.callbackUri,
+    this.webVpnOnly = false,
   });
 
   final Uri callbackUri;
+  final bool webVpnOnly;
 
   @override
   State<WebVpnOAuthCompletionPage> createState() =>
@@ -46,7 +49,6 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
   Timer? _resourceErrorTimer;
   bool _completed = false;
   bool _terminalFailure = false;
-  bool _openingAcademicSystem = false;
   bool _finalizingAcademic = false;
   bool _checkingTicketLogin = false;
   String? _lastNavigationUrl;
@@ -58,8 +60,7 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
   @override
   void initState() {
     super.initState();
-    _status =
-        AcademicUrlResolver.usesWebVpn ? '正在建立 WebVPN 校园服务会话' : '正在建立校园网直连会话';
+    _status = widget.webVpnOnly ? '正在建立WebVPN服务会话' : '正在建立教务系统直连会话';
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(Colors.transparent)
@@ -91,7 +92,9 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
     return PopScope(
       canPop: _error != null,
       child: Scaffold(
-        appBar: AppBar(title: const Text('上大校园账户')),
+        appBar: AppBar(
+          title: Text(widget.webVpnOnly ? '登录WebVPN服务' : '上大校园账户'),
+        ),
         body: Stack(
           children: [
             Positioned.fill(
@@ -158,13 +161,14 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
     // cookies installed by AcademicNativeAuthService before the first load.
     await Future<void>.delayed(const Duration(milliseconds: 500));
     if (!mounted) return;
+    _debug('callback-load', widget.callbackUri.toString());
     await _controller.loadRequest(widget.callbackUri);
     _cookiePollTimer = Timer.periodic(
       const Duration(milliseconds: 600),
       (_) => unawaited(_checkLoginCookie()),
     );
     _timeoutTimer = Timer(
-      const Duration(seconds: 75),
+      HttpTimeout.oauthCompletion,
       () => _fail('建立教务系统登录会话超时，请返回后重新登录'),
     );
   }
@@ -184,31 +188,37 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
   void _handleNavigation(String value, {bool pageFinished = false}) {
     final uri = Uri.tryParse(value);
     if (uri == null) return;
+    _debug(pageFinished ? 'page-finished' : 'page-started', value);
     _clearTransientResourceErrorAfterNavigation(value);
     _lastNavigationUrl = value;
     if (_terminalFailure) return;
-    if (AcademicUrlResolver.usesWebVpn &&
+    if (widget.webVpnOnly &&
         pageFinished &&
         uri.host == _portalUri.host &&
         uri.path.startsWith('/site-nav')) {
-      unawaited(_openAcademicSystem());
+      unawaited(_finishWebVpnLogin());
       return;
     }
     // Android emits onPageStarted before the navigation response has been
     // committed to the CookieManager. Popping at that point races the
     // subsequent schedule sync and loses the freshly-created academic
     // session. Treat the page as ready only after onPageFinished.
-    if (pageFinished && _isAcademicReady(uri)) {
+    if (!widget.webVpnOnly && pageFinished && _isAcademicReady(uri)) {
       unawaited(_finishAcademicLogin());
       return;
     }
-    if (pageFinished && AcademicUrlResolver.isTicketLoginUrl(value)) {
+    if (!widget.webVpnOnly &&
+        pageFinished &&
+        AcademicUrlResolver.isTicketLoginUrl(value)) {
       unawaited(_verifyAfterTicketLogin());
     }
   }
 
   NavigationDecision _handleNavigationRequest(NavigationRequest request) {
     final uri = Uri.tryParse(request.url);
+    if (request.isMainFrame) {
+      _debug('navigation-request', request.url);
+    }
     if (uri != null && _isInternalWebViewScheme(uri.scheme)) {
       return NavigationDecision.navigate;
     }
@@ -218,6 +228,7 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
       return NavigationDecision.navigate;
     }
     if (request.isMainFrame) {
+      _debug('blocked-navigation', request.url);
       _fail('认证页面尝试跳转到非上海大学地址');
     }
     return NavigationDecision.prevent;
@@ -228,6 +239,11 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
       return;
     }
     final failedUrl = error.url ?? _lastNavigationUrl;
+    _debug(
+      'web-resource-error code=${error.errorCode} '
+      'type=${error.errorType} description=${error.description}',
+      failedUrl,
+    );
     _resourceErrorTimer?.cancel();
     _pendingResourceErrorUrl = failedUrl;
     final generation = ++_resourceErrorGeneration;
@@ -260,7 +276,7 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
       _clearPendingResourceError();
       return;
     }
-    if (!AcademicUrlResolver.usesWebVpn) {
+    if (!widget.webVpnOnly) {
       _clearPendingResourceError();
       _fail('校园网直连登录会话建立失败：$description');
       return;
@@ -272,8 +288,13 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
       if (cookies.any(
         (cookie) => cookie.name == 'webvpn-token' && cookie.value.isNotEmpty,
       )) {
+        _debug(
+          'resource-error recovered by portal cookies '
+          'names=${_cookieNames(cookies)}',
+          currentUrl,
+        );
         _clearPendingResourceError();
-        await _openAcademicSystem();
+        await _finishWebVpnLogin();
         return;
       }
     } on Object {
@@ -307,39 +328,34 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
   }
 
   Future<void> _checkLoginCookie() async {
-    if (_completed || _terminalFailure || !AcademicUrlResolver.usesWebVpn) {
+    if (_completed || _terminalFailure || !widget.webVpnOnly) {
       return;
     }
     final cookies = await WebViewCookieManager().getCookies(domain: _portalUri);
     if (cookies.any(
       (cookie) => cookie.name == 'webvpn-token' && cookie.value.isNotEmpty,
     )) {
-      await _openAcademicSystem();
+      _debug('portal session cookie visible names=${_cookieNames(cookies)}');
+      await _finishWebVpnLogin();
     }
   }
 
-  Future<void> _openAcademicSystem() async {
-    if (!AcademicUrlResolver.usesWebVpn ||
-        _completed ||
-        _terminalFailure ||
-        _openingAcademicSystem ||
-        !mounted) {
+  Future<void> _finishWebVpnLogin() async {
+    if (_finalizingAcademic || _completed || _terminalFailure || !mounted) {
       return;
     }
-    _openingAcademicSystem = true;
-    setState(() => _status = '正在进入上海大学教务系统');
-    try {
-      await _controller.loadRequest(
-        Uri.parse('${AcademicUrlResolver.webVpnBaseUrl}/'),
-      );
-    } on Object {
-      _fail('WebVPN 已认证，但无法进入教务系统');
-    }
+    _finalizingAcademic = true;
+    if (mounted) setState(() => _status = '正在验证WebVPN服务会话');
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    if (!mounted || _completed || _terminalFailure) return;
+    _succeed();
   }
 
   Future<void> _verifyAfterTicketLogin() async {
     if (_completed || _terminalFailure || _checkingTicketLogin) return;
     _checkingTicketLogin = true;
+    _debug('ticket-login-finished; waiting before home reload',
+        _lastNavigationUrl);
     if (mounted) setState(() => _status = '正在完成教务系统票据登录');
     await Future<void>.delayed(const Duration(seconds: 6));
     if (_completed || !mounted) return;
@@ -352,6 +368,7 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
       return;
     }
     _finalizingAcademic = true;
+    _debug('academic-ready; waiting for cookie commit', _lastNavigationUrl);
     // Give Android WebView's network service a short window to commit
     // Set-Cookie headers from the completed academic page before the Flutter
     // side starts its HTTP schedule request.
@@ -361,9 +378,7 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
   }
 
   bool _isAcademicReady(Uri uri) {
-    final expectedHost = AcademicUrlResolver.usesWebVpn
-        ? AcademicUrlResolver.webVpnHost
-        : AcademicConstants.host;
+    const expectedHost = AcademicConstants.host;
     if (uri.host != expectedHost || !uri.path.startsWith('/jwglxt/')) {
       return false;
     }
@@ -377,6 +392,7 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
     _clearPendingResourceError();
     _cookiePollTimer?.cancel();
     _timeoutTimer?.cancel();
+    _debug('completion-success', _lastNavigationUrl);
     Navigator.of(context).pop(true);
   }
 
@@ -386,6 +402,7 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
     _clearPendingResourceError();
     _cookiePollTimer?.cancel();
     _timeoutTimer?.cancel();
+    _debug('completion-failed message=$message', _lastNavigationUrl);
     setState(() => _error = message);
   }
 
@@ -399,5 +416,28 @@ class _WebVpnOAuthCompletionPageState extends State<WebVpnOAuthCompletionPage> {
         scheme == 'data' ||
         scheme == 'blob' ||
         scheme == 'javascript';
+  }
+
+  List<String> _cookieNames(List<WebViewCookie> cookies) {
+    final names = cookies
+        .where((cookie) => cookie.name.isNotEmpty && cookie.value.isNotEmpty)
+        .map((cookie) => cookie.name)
+        .toSet()
+        .toList()
+      ..sort();
+    return names;
+  }
+
+  void _debug(String message, [String? value]) {
+    if (!kDebugMode) return;
+    final uri = value == null ? null : Uri.tryParse(value);
+    final location = uri == null ? '' : ' | ${_describeUri(uri)}';
+    debugPrint('[SHU_AUTH_CALLBACK] $message$location');
+  }
+
+  String _describeUri(Uri uri) {
+    final queryKeys = uri.queryParameters.keys.toList()..sort();
+    return '${uri.scheme}://${uri.host}${uri.path}'
+        '${queryKeys.isEmpty ? '' : ' queryKeys=$queryKeys'}';
   }
 }
