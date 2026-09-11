@@ -89,13 +89,17 @@ class CampusReachabilityService {
     }
     try {
       return await _classify(() async {
-        final request = await client.getUrl(directForumUri);
-        request.followRedirects = false;
-        final response = await request.close();
-        await response.drain<void>();
-        return const CampusReachabilityResult(
-          status: CampusReachabilityStatus.reachable,
-        );
+        // connectionTimeout 只覆盖建连阶段；这里再为整个探测设置上限，
+        // 避免连接成功但响应头/响应体迟迟不结束时一直卡住登录入口。
+        return await (() async {
+          final request = await client.getUrl(directForumUri);
+          request.followRedirects = false;
+          final response = await request.close();
+          await response.drain<void>();
+          return const CampusReachabilityResult(
+            status: CampusReachabilityStatus.reachable,
+          );
+        })().timeout(timeout);
       });
     } finally {
       client.close(force: true);
